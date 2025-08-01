@@ -1,11 +1,12 @@
 import os
+import datetime
 from datetime import timedelta
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import JWTManager, create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
 from functools import wraps
-from flask_sqlalchemy import SQLAlchemy 
+from flask_sqlalchemy import SQLAlchemy
 import datetime
 from dateutil import parser
 from flask_cors import CORS
@@ -22,6 +23,8 @@ from dotenv import load_dotenv
 from flask_cors import cross_origin
 from math import radians, sin, cos, sqrt, atan2
 import json
+from sqlalchemy import func, distinct, text
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -67,6 +70,20 @@ class Subject(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
 
+# Admin required decorator
+def admin_required():
+    def wrapper(fn):
+        @wraps(fn)
+        @jwt_required()
+        def decorator(*args, **kwargs):
+            current_user_id = get_jwt_identity()
+            admin = Admin.query.get(current_user_id)
+            if not admin:
+                return jsonify({'error': 'Admin access required'}), 403
+            return fn(*args, **kwargs)
+        return decorator
+    return wrapper
+
 # User model
 roles_users = db.Table('roles_users',
     db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
@@ -86,10 +103,10 @@ class User(db.Model):
     password = db.Column(db.String(100), nullable=False)
     confirm_password = db.Column(db.String(256), nullable=False)
     bio = db.Column(db.String(500), nullable=True)
-    phone_number = db.Column(db.String(20), nullable=True)  # New field
+    phone_number = db.Column(db.String(20), nullable=True)
     profile_image = db.Column(db.String(200), nullable=True)
-    
-
+    date_created = db.Column(db.DateTime, default=datetime.datetime.now)
+    last_login = db.Column(db.DateTime, default=datetime.datetime.now, onupdate=datetime.datetime.now)
     
     location = db.relationship('Location', backref='user', uselist=False)
     education = db.relationship('Education', backref='user')
@@ -150,7 +167,7 @@ class Notification(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     content = db.Column(db.String(500), nullable=False)
     is_read = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
    
 
     
@@ -160,7 +177,7 @@ class Notification(db.Model):
 # Course model
 class Course(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(200), nullable=False)
+    title = db.Column(db.JSON, nullable=False)  # Changed to JSON to store array of strings
     course_name = db.Column(db.String(200), nullable=False)  # Added for Figma design
     image = db.Column(db.String(200), nullable=True)
     content = db.Column(db.Text, nullable=False)
@@ -172,9 +189,11 @@ class Course(db.Model):
     price = db.Column(db.Float, nullable=False, default=0.0)
     student_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(50), default='draft')  # draft, published, archived
-    author_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    author_id = db.Column(db.Integer, nullable=False)  # Can be admin.id or instructor.id
     instructor_id = db.Column(db.Integer, db.ForeignKey('instructor.id'), nullable=True)
-    author = db.relationship('User', backref=db.backref('courses', lazy='dynamic'))
+    is_admin_author = db.Column(db.Boolean, default=False)  # Flag to identify admin authors
+    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
+    last_updated = db.Column(db.DateTime, onupdate=datetime.datetime.now)
     date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     last_updated = db.Column(db.DateTime, onupdate=datetime.datetime.utcnow)
     categories = db.relationship('CourseCategory', secondary='course_category_association', back_populates='courses')
@@ -191,10 +210,11 @@ class Module(db.Model):
     title = db.Column(db.String(200), nullable=True)
     description = db.Column(db.Text, nullable=True)
     content = db.Column(db.Text, nullable=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
-    order = db.Column(db.Integer, nullable=False)  # To maintain module order (1/3, 2/3, etc.)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)  # Changed to nullable=True
+    order = db.Column(db.Integer, nullable=True)  # Changed to nullable=True since it depends on course
     additional_resources = db.Column(db.String(200), nullable=True)
     media_file = db.Column(db.String(200), nullable=True)
+    is_template = db.Column(db.Boolean, default=True)  # New field to mark if module is a template
 
 # CourseCategory model
 class CourseCategory(db.Model):
@@ -221,123 +241,133 @@ enrollment_table = db.Table('enrollment',
 @jwt_required()
 def create_course():
     try:
-        claims = get_jwt()
-        author_id = get_jwt_identity()
+        # Get current user from token
+        current_user_id = get_jwt_identity()
         
-        # Get form data
-        data = request.form
+        # Check if user is admin or instructor directly without User model
+        admin = Admin.query.filter_by(id=current_user_id).first()
+        instructor = Instructor.query.filter_by(id=current_user_id).first()
         
-        # Validate required fields for course creation
-        required_fields = ['course_category', 'course_type', 'course_name', 'course_title', 'brief', 'number_of_modules']
-        for field in required_fields:
-            if not data.get(field):
-                return jsonify({'error': f'{field} is required'}), 400
-        
-        # If admin is creating the course, we need to create or get a system user
-        if claims.get('is_admin'):
-            system_user = User.query.filter_by(email='system@admin.com').first()
-            if not system_user:
-                # Create a system user if it doesn't exist
-                system_user = User(
-                    full_name='System Admin',
-                    email='system@admin.com',
-                    password=generate_password_hash('system123', method='pbkdf2:sha256'),
-                    confirm_password=generate_password_hash('system123', method='pbkdf2:sha256')
+        if not admin and not instructor:
+            return jsonify({'error': 'Only admins and instructors can create courses'}), 403
+
+        # Get or create User record
+        user = None
+        if admin:
+            user = User.query.filter_by(email=admin.email).first()
+            if not user:
+                user = User(
+                    email=admin.email,
+                    full_name=admin.fullname,
+                    password=admin.password,
+                    confirm_password=admin.password
                 )
-                db.session.add(system_user)
-                db.session.commit()
-            author_id = system_user.id
-        
-        # Create course
+                db.session.add(user)
+                db.session.flush()
+        elif instructor:
+            user = User.query.filter_by(email=instructor.email).first()
+            if not user:
+                user = User(
+                    email=instructor.email,
+                    full_name=instructor.full_name,
+                    password=instructor.password,
+                    confirm_password=instructor.password
+                )
+                db.session.add(user)
+                db.session.flush()
+
+        # Get request data
+        data = request.get_json()
+
+        # Validate required fields
+        required_fields = ['titles', 'course_name', 'content', 'price', 'categories']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        # Validate categories
+        if not data['categories'] or not isinstance(data['categories'], list):
+            return jsonify({'error': 'Categories must be a non-empty list'}), 400
+
+        # Create new course
         course = Course(
-            title=data.get('course_title'),
-            course_name=data.get('course_name'),
-            content=data.get('body', ''),
+            title=data['titles'],  # Now accepts array of titles
+            course_name=data['course_name'],
+            content=data['content'],
+            price=data['price'],
             brief=data.get('brief'),
-            number_of_modules=int(data.get('number_of_modules', 0)),
             course_type=data.get('course_type'),
-            author_id=author_id,
-            status='draft',
-            price=float(data.get('price', 0.0))
+            additional_resources=data.get('additional_resources'),
+            author_id=admin.id if admin else instructor.id,  # Set the actual admin/instructor ID
+            instructor_id=instructor.id if instructor else None,
+            is_admin_author=True if admin else False  # Flag to identify admin authors
         )
-        
-        # Handle file uploads
-        files = request.files
 
-        # Handle course image
-        if 'image' in files:
-            image_file = files['image']
-            if image_file and allowed_file(image_file.filename):
-                filename = secure_filename(image_file.filename)
-                image_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                course.image = filename
+        # Handle image upload if provided
+        if 'image' in request.files:
+            image = request.files['image']
+            if image and allowed_file(image.filename):
+                filename = secure_filename(image.filename)
+                image_path = os.path.join(app.config['UPLOAD_FOLDER'], 'courses', filename)
+                os.makedirs(os.path.dirname(image_path), exist_ok=True)
+                image.save(image_path)
+                course.image = f'courses/{filename}'
 
-        # Handle course video
-        if 'video' in files:
-            video_file = files['video']
-            if video_file and allowed_file(video_file.filename):
-                filename = secure_filename(video_file.filename)
-                video_file.save(os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename))
-                course.video = os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename)
+        # Handle video upload if provided
+        if 'video' in request.files:
+            video = request.files['video']
+            if video and allowed_file(video.filename):
+                filename = secure_filename(video.filename)
+                video_path = os.path.join(app.config['UPLOAD_FOLDER'], 'courses', filename)
+                os.makedirs(os.path.dirname(video_path), exist_ok=True)
+                video.save(video_path)
+                course.video = f'courses/{filename}'
 
-        # Handle additional resources
-        if 'additional_resources' in files:
-            resources_file = files['additional_resources']
-            if resources_file and allowed_file(resources_file.filename):
-                filename = secure_filename(resources_file.filename)
-                resources_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'resources', filename))
-                course.additional_resources = os.path.join('resources', filename)
-        
-        db.session.add(course)
-        
-        # Create and associate course category
-        category_name = data.get('course_category')
-        category = CourseCategory.query.filter_by(name=category_name).first()
-        if not category:
-            category = CourseCategory(name=category_name)
-            db.session.add(category)
-        
-        course.categories.append(category)
+        # Handle categories if provided
+        if 'categories' in data:
+            for category_name in data['categories']:
+                category = CourseCategory.query.filter_by(name=category_name).first()
+                if not category:
+                    # Create category if it doesn't exist
+                    category = CourseCategory(name=category_name)
+                    db.session.add(category)
+                    db.session.flush()
+                course.categories.append(category)
 
         # Handle modules if provided
-        modules_data = json.loads(data.get('modules', '[]'))
-        for module_data in modules_data:
-            module = Module(
-                name=module_data.get('name'),
-                title=module_data.get('title'),
-                description=module_data.get('description'),
-                content=module_data.get('content'),
-                course_id=course.id,
-                order=module_data.get('order', 1)
-            )
-            
-            # Handle module media file if provided
-            module_file_key = f"module_{module_data.get('order')}_media"
-            if module_file_key in files:
-                media_file = files[module_file_key]
-                if media_file and allowed_file(media_file.filename):
-                    filename = secure_filename(media_file.filename)
-                    media_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', filename))
-                    module.media_file = os.path.join('modules', filename)
+        if 'module_ids' in data:
+            module_ids = data['module_ids']
+            for index, module_id in enumerate(module_ids):
+                module = Module.query.get(module_id)
+                if module and module.is_template:
+                    new_module = Module(
+                        name=module.name,
+                        title=module.title,
+                        description=module.description,
+                        content=module.content,
+                        course_id=course.id,
+                        order=index,
+                        additional_resources=module.additional_resources,
+                        media_file=module.media_file,
+                        is_template=False
+                    )
+                    db.session.add(new_module)
+                elif module:
+                    module.course_id = course.id
+                    module.order = index
+                    module.is_template = False
 
-            # Handle module resources if provided
-            module_resources_key = f"module_{module_data.get('order')}_resources"
-            if module_resources_key in files:
-                resources_file = files[module_resources_key]
-                if resources_file and allowed_file(resources_file.filename):
-                    filename = secure_filename(resources_file.filename)
-                    resources_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', 'resources', filename))
-                    module.additional_resources = os.path.join('modules', 'resources', filename)
-            
-            course.modules.append(module)
-        
+        # Update number of modules
+        course.number_of_modules = len(data.get('module_ids', []))
+
+        db.session.add(course)
         db.session.commit()
-        
+
         return jsonify({
             'message': 'Course created successfully',
             'course_id': course.id
         }), 201
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -345,20 +375,48 @@ def create_course():
 # Get all courses
 @app.route('/courses', methods=['GET'])
 def get_courses():
-    courses = Course.query.all()
+    # Get pagination parameters from request args
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    
+    # Get filter parameters
+    course_type = request.args.get('course_type')
+    category = request.args.get('category')
+    price_min = request.args.get('price_min', type=float)
+    price_max = request.args.get('price_max', type=float)
+    search_keyword = request.args.get('search')
+    
+    # Build query
+    query = Course.query
+    
+    # Apply filters
+    if course_type:
+        query = query.filter(Course.course_type == course_type)
+    if category:
+        query = query.join(Course.categories).filter(CourseCategory.name == category)
+        query = query.options(db.joinedload(Course.categories))  # Eager load categories
+    else:
+        query = query.options(db.joinedload(Course.categories))  # Always eager load categories
+    if price_min is not None:
+        query = query.filter(Course.price >= price_min)
+    if price_max is not None:
+        query = query.filter(Course.price <= price_max)
+    if search_keyword:
+        search = f"%{search_keyword}%"
+        query = query.filter(
+            or_(
+                Course.course_name.ilike(search),
+                Course.content.ilike(search),
+                Course.brief.ilike(search)
+            )
+        )
+    
+    # Get paginated results
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    courses = pagination.items
+    
     courses_data = []
     for course in courses:
-        # Get modules with descriptions
-        modules_data = [{
-            'id': module.id,
-            'name': module.name,
-            'title': module.title,
-            'description': module.description,
-            'order': module.order,
-            'media_file': module.media_file,
-            'additional_resources': module.additional_resources
-        } for module in course.modules.order_by(Module.order)]
-
         course_dict = {
             'id': course.id,
             'title': course.title,
@@ -375,28 +433,55 @@ def get_courses():
             'date_created': course.date_created.isoformat() if course.date_created else None,
             'last_updated': course.last_updated.isoformat() if course.last_updated else None,
             'categories': [category.name for category in course.categories],
-            'modules': modules_data,
             'student_count': course.student_count
         }
         
-        # Handle case where author might be None
-        if course.author:
-            course_dict['author'] = {
-                'id': course.author.id,
-                'full_name': course.author.full_name,
-                'email': course.author.email
-            }
+        # Handle author information based on is_admin_author flag
+        if course.is_admin_author:
+            admin = Admin.query.filter_by(id=course.author_id).first()
+            if admin:
+                course_dict['author'] = {
+                    'id': admin.id,
+                    'full_name': admin.fullname,
+                    'email': admin.email,
+                    'type': 'admin'
+                }
+            else:
+                course_dict['author'] = 'Unknown'
         else:
-            course_dict['author'] = 'Unknown'
+            instructor = None
+            if course.instructor_id:
+                instructor = db.session.get(Instructor, course.instructor_id)
+            if not instructor:
+                instructor = db.session.get(Instructor, course.author_id)
+            
+            if instructor:
+                course_dict['author'] = {
+                    'id': instructor.id,
+                    'full_name': instructor.full_name,
+                    'email': instructor.email,
+                    'type': 'instructor'
+                }
+            else:
+                course_dict['author'] = 'Unknown'
 
         courses_data.append(course_dict)
 
-    return jsonify(courses_data), 200
+    return jsonify({
+        'items': courses_data,
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'current_page': page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev,
+        'next_page': pagination.next_num if pagination.has_next else None,
+        'prev_page': pagination.prev_num if pagination.has_prev else None
+    }), 200
 
 # Get a specific course
 @app.route('/courses/<int:course_id>', methods=['GET'])
 def get_course(course_id):
-    course = Course.query.get(course_id)
+    course = db.session.get(Course, course_id)
     if not course:
         return jsonify({'error': 'Course not found'}), 404
 
@@ -429,13 +514,38 @@ def get_course(course_id):
         'last_updated': course.last_updated.isoformat() if course.last_updated else None,
         'categories': [category.name for category in course.categories],
         'modules': modules_data,
-        'student_count': course.student_count,
-        'author': {
-            'id': course.author.id,
-            'full_name': course.author.full_name,
-            'email': course.author.email
-        } if course.author else 'Unknown'
+        'student_count': course.student_count
     }
+
+    # Handle author information based on is_admin_author flag
+    if course.is_admin_author:
+        admin = Admin.query.filter_by(id=course.author_id).first()
+        if admin:
+            course_data['author'] = {
+                'id': admin.id,
+                'full_name': admin.fullname,
+                'email': admin.email,
+                'type': 'admin'
+            }
+        else:
+            course_data['author'] = 'Unknown'
+    else:
+        instructor = None
+        if course.instructor_id:
+            instructor = db.session.get(Instructor, course.instructor_id)
+        if not instructor:
+            instructor = db.session.get(Instructor, course.author_id)
+        
+        if instructor:
+            course_data['author'] = {
+                'id': instructor.id,
+                'full_name': instructor.full_name,
+                'email': instructor.email,
+                'type': 'instructor'
+            }
+        else:
+            course_data['author'] = 'Unknown'
+
     return jsonify(course_data), 200
 
 # Update a course
@@ -606,6 +716,7 @@ def update_course(course_id):
   
   # Create a new category
 @app.route('/categories', methods=['POST'])
+@jwt_required()
 def create_category():
     data = request.get_json()
     name = data.get('name')
@@ -626,12 +737,31 @@ def create_category():
 # Get all categories
 @app.route('/categories', methods=['GET'])
 def get_categories():
-    categories = CourseCategory.query.all()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    
+    # Get paginated categories
+    pagination = CourseCategory.query.paginate(page=page, per_page=per_page, error_out=False)
+    categories = pagination.items
+    
+    # Prepare response data
     categories_data = [{'id': category.id, 'name': category.name} for category in categories]
-    return jsonify(categories_data), 200
+    
+    response = {
+        'items': categories_data,
+        'total_items': pagination.total,
+        'total_pages': pagination.pages,
+        'current_page': page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }
+    
+    return jsonify(response), 200
 
 # Update a category
 @app.route('/categories/<int:category_id>', methods=['PUT'])
+@jwt_required()
+@admin_required()
 def update_category(category_id):
     category = CourseCategory.query.get(category_id)
     if not category:
@@ -647,6 +777,8 @@ def update_category(category_id):
 
 # Delete a category
 @app.route('/categories/<int:category_id>', methods=['DELETE'])
+@jwt_required()
+@admin_required()
 def delete_category(category_id):
     category = CourseCategory.query.get(category_id)
     if not category:
@@ -662,49 +794,123 @@ def delete_category(category_id):
 @app.route('/modules', methods=['POST'])
 @jwt_required()
 def create_module():
-    data = request.get_json()
-    name = data.get('name')
-    description = data.get('description')
-    course_id = data.get('course_id')
-    title = data.get('title')
-    content = data.get('content')
-    additional_resources = data.get('additional_resources')
-    media_file = data.get('media_file')
+    try:
+        # Handle both form-data and JSON requests
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
 
-    if not name or not course_id:
-        return jsonify({'error': 'Module name and course ID are required'}), 400
+        # Validate required fields
+        if not data.get('name'):
+            return jsonify({'error': 'Module name is required'}), 400
 
-    # Get the current highest order number for the course
-    highest_order = db.session.query(func.max(Module.order)).filter(Module.course_id == course_id).scalar()
-    new_order = 1 if highest_order is None else highest_order + 1
+        # Create module
+        module = Module(
+            name=data.get('name'),
+            title=data.get('title'),
+            description=data.get('description'),
+            content=data.get('content'),
+            is_template=True  # Set as template by default
+        )
 
-    module = Module(
-        name=name,
-        description=description,
-        course_id=course_id,
-        title=title,
-        content=content,
-        order=new_order,
-        additional_resources=additional_resources,
-        media_file=media_file
-    )
-    db.session.add(module)
-    
-    course = Course.query.get(course_id)
-    if course:
-        course.number_of_modules += 1
-    
-    db.session.commit()
+        # If course_id is provided, associate with course
+        course_id = data.get('course_id')
+        if course_id:
+            course = Course.query.get(course_id)
+            if not course:
+                return jsonify({'error': 'Course not found'}), 404
+            module.course_id = course_id
+            module.is_template = False
+            # Get highest order for the course
+            highest_order = db.session.query(func.max(Module.order)).filter(Module.course_id == course_id).scalar()
+            module.order = 1 if highest_order is None else highest_order + 1
 
-    return jsonify({'message': 'Module created successfully'}), 201
+        # Handle file uploads
+        files = request.files if not request.is_json else {}
+
+        # Handle module media file
+        if 'media_file' in files:
+            media_file = files['media_file']
+            if media_file and allowed_file(media_file.filename):
+                filename = secure_filename(media_file.filename)
+                media_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', filename))
+                module.media_file = os.path.join('modules', filename)
+
+        # Handle additional resources
+        if 'additional_resources' in files:
+            resources_file = files['additional_resources']
+            if resources_file and allowed_file(resources_file.filename):
+                filename = secure_filename(resources_file.filename)
+                resources_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', 'resources', filename))
+                module.additional_resources = os.path.join('modules', 'resources', filename)
+
+        db.session.add(module)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Module created successfully',
+            'module_id': module.id
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 
 # Get all modules
 @app.route('/modules', methods=['GET'])
 def get_modules():
-    modules = Module.query.all()
-    modules_data = [{'id': module.id, 'name': module.name, 'description': module.description, 'course_id': module.course_id} for module in modules]
-    return jsonify(modules_data), 200
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    
+    # Get filter parameters
+    course_id = request.args.get('course_id', type=int)
+    search_keyword = request.args.get('search')
+    
+    # Build query
+    query = Module.query
+    
+    # Apply filters
+    if course_id:
+        query = query.filter(Module.course_id == course_id)
+    if search_keyword:
+        search = f"%{search_keyword}%"
+        query = query.filter(or_(
+            Module.name.ilike(search),
+            Module.title.ilike(search),
+            Module.description.ilike(search)
+        ))
+    
+    # Get paginated modules
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    modules = pagination.items
+    
+    modules_data = [{
+        'id': module.id,
+        'name': module.name,
+        'title': module.title,
+        'description': module.description,
+        'content': module.content,
+        'course_id': module.course_id,
+        'order': module.order,
+        'additional_resources': module.additional_resources,
+        'media_file': module.media_file,
+        'course': {
+            'id': module.course.id,
+            'title': module.course.title
+        } if module.course else None
+    } for module in modules]
+    
+    return jsonify({
+        'items': modules_data,
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'current_page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }), 200
 
 # Update a module
 @app.route('/modules/<int:module_id>', methods=['PUT'])
@@ -723,6 +929,31 @@ def update_module(module_id):
     db.session.commit()
 
     return jsonify({'message': 'Module updated successfully'}), 200
+
+# Get a specific module
+@app.route('/modules/<int:module_id>', methods=['GET'])
+def get_module(module_id):
+    module = Module.query.get(module_id)
+    if not module:
+        return jsonify({'error': 'Module not found'}), 404
+
+    module_data = {
+        'id': module.id,
+        'name': module.name,
+        'title': module.title,
+        'description': module.description,
+        'content': module.content,
+        'course_id': module.course_id,
+        'order': module.order,
+        'additional_resources': module.additional_resources,
+        'media_file': module.media_file,
+        'course': {
+            'id': module.course.id,
+            'title': module.course.title
+        } if module.course else None
+    }
+
+    return jsonify(module_data), 200
 
 # Delete a module
 @app.route('/modules/<int:module_id>', methods=['DELETE'])
@@ -888,16 +1119,22 @@ def profile():
         return jsonify({'error': 'User not found'}), 404
 
     if request.method == 'GET':
-        user_data = {
-            'id': user.id,
-            'full_name': user.full_name,
-            'email': user.email,
-            'bio': user.bio,
-            'phone_number': user.phone_number,  # Add this line
-            'profile_image': user.profile_image,
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        
+        users = User.query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        profiles = [{
+            'id': u.id,
+            'full_name': u.full_name,
+            'email': u.email,
+            'bio': u.bio,
+            'phone_number': u.phone_number,
+            'profile_image': u.profile_image,
             'location': {
-                'country_region': user.location.country_region if user.location else None,
-                'city': user.location.city if user.location else None
+                'country_region': u.location.country_region if u.location else None,
+                'state': u.location.state if u.location else None,
+                'city': u.location.city if u.location else None
             },
             'education': [{
                 'id': edu.id,
@@ -906,7 +1143,7 @@ def profile():
                 'field_of_study': edu.field_of_study,
                 'start_date': edu.start_date.isoformat() if edu.start_date else None,
                 'end_date': edu.end_date.isoformat() if edu.end_date else None
-            } for edu in user.education],
+            } for edu in u.education],
             'work_experience': [{
                 'id': work.id,
                 'company': work.company,
@@ -914,7 +1151,7 @@ def profile():
                 'job_description': work.job_description,
                 'start_date': work.start_date.isoformat() if work.start_date else None,
                 'end_date': work.end_date.isoformat() if work.end_date else None
-            } for work in user.work_experience],
+            } for work in u.work_experience],
             'licenses_certifications': [{
                 'id': lic.id,
                 'name': lic.name,
@@ -923,9 +1160,15 @@ def profile():
                 'expiration_date': lic.expiration_date.isoformat() if lic.expiration_date else None,
                 'credentials_id': lic.credentials_id,
                 'credential_url': lic.credential_url
-            } for lic in user.licenses_certifications]
-        }
-        return jsonify(user_data), 200
+            } for lic in u.licenses_certifications]
+        } for u in users.items]
+
+        return jsonify({
+            'items': profiles,
+            'total': users.total,
+            'pages': users.pages,
+            'current_page': page
+        }), 200
 
     if request.method == 'PUT':
         data = request.get_json()
@@ -1181,48 +1424,68 @@ def manage_license():
     #user endpoint
 
 @app.route('/users', methods=['GET'])
-@jwt_required()
-def get_all_users():
-    users = User.query.all()
-    users_data = [
-        {
-            'id': user.id,
-            'full_name': user.full_name,
-            'email': user.email,
-            'bio': user.bio,
-            'profile_image': user.profile_image,
-            'location': {
-                'country_region': user.location.country_region if user.location else None,
-                'city': user.location.city if user.location else None
-            },
-            'education': [{
-                'id': education.id,
-                'school': education.school,
-                'degree': education.degree,
-                'field_of_study': education.field_of_study,
-                'start_date': education.start_date.isoformat() if education.start_date else None,
-                'end_date': education.end_date.isoformat() if education.end_date else None
-            } for education in user.education],
-            'work_experience': [{
-                'id': work.id,
-                'company': work.company,
-                'role_title': work.role_title,
-                'job_description': work.job_description,
-                'start_date': work.start_date.isoformat() if work.start_date else None,
-                'end_date': work.end_date.isoformat() if work.end_date else None
-            } for work in user.work_experience],
-            'licenses_certifications': [{
-                'id': license.id,
-                'name': license.name,
-                'issuing_organization': license.issuing_organization,
-                'issue_date': license.issue_date.isoformat() if license.issue_date else None,
-                'expiration_date': license.expiration_date.isoformat() if license.expiration_date else None,
-                'credentials_id': license.credentials_id,
-                'credential_url': license.credential_url
-            } for license in user.licenses_certifications]
-        } for user in users
-    ]
-    return jsonify(users_data), 200
+def get_users():
+    # Get pagination parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    
+    # Get search parameters
+    search_keyword = request.args.get('search')
+    name_filter = request.args.get('name')
+    email_filter = request.args.get('email')
+    location_filter = request.args.get('location')
+    
+    # Build base query
+    query = User.query
+    
+    # Apply filters
+    if search_keyword:
+        search = f"%{search_keyword}%"
+        query = query.filter(or_(
+            User.full_name.ilike(search),
+            User.email.ilike(search),
+            User.bio.ilike(search)
+        ))
+    
+    if name_filter:
+        query = query.filter(User.full_name.ilike(f"%{name_filter}%"))
+    
+    if email_filter:
+        query = query.filter(User.email.ilike(f"%{email_filter}%"))
+    
+    if location_filter:
+        query = query.join(User.location).filter(or_(
+            Location.country_region.ilike(f"%{location_filter}%"),
+            Location.city.ilike(f"%{location_filter}%")
+        ))
+    
+    # Execute paginated query
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    users = pagination.items
+    
+    # Prepare response data
+    users_data = [{
+        'id': user.id,
+        'full_name': user.full_name,
+        'email': user.email,
+        'bio': user.bio,
+        'phone_number': user.phone_number,
+        'profile_image': user.profile_image,
+        'location': {
+            'country_region': user.location.country_region,
+            'city': user.location.city
+        } if user.location else None
+    } for user in users]
+    
+    return jsonify({
+        'items': users_data,
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'current_page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }), 200
 
 @app.route('/user/<int:user_id>', methods=['DELETE'])
 @jwt_required()
@@ -1415,7 +1678,7 @@ class Blog(db.Model):
     minutes_read = db.Column(db.Integer, nullable=True)
     author_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     author = db.relationship('User', backref=db.backref('blogs', lazy='dynamic'))
-    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
 
 # Create a new blog post
 @app.route('/blogs', methods=['POST'])
@@ -1452,7 +1715,13 @@ def create_blog():
 # Get all blog posts
 @app.route('/blogs', methods=['GET'])
 def get_blogs():
-    blogs = Blog.query.all()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    
+    # Apply pagination to the query
+    pagination = Blog.query.paginate(page=page, per_page=per_page, error_out=False)
+    blogs = pagination.items
+    
     blogs_data = [{
         'id': blog.id,
         'title': blog.title,
@@ -1465,7 +1734,17 @@ def get_blogs():
         'author_profile_image': blog.author.profile_image if blog.author else None,
         'date_created': blog.date_created
     } for blog in blogs]
-    return jsonify(blogs_data), 200
+    
+    return jsonify({
+        'items': blogs_data,
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'current_page': page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev,
+        'next_page': pagination.next_num if pagination.has_next else None,
+        'prev_page': pagination.prev_num if pagination.has_prev else None
+    }), 200
 
 # Get a specific blog post
 @app.route('/blogs/<int:blog_id>', methods=['GET'])
@@ -1540,7 +1819,7 @@ class Message(db.Model):
     sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
     is_read = db.Column(db.Boolean, default=False)
 
     sender = db.relationship('User', foreign_keys=[sender_id], backref='sent_messages')
@@ -1723,7 +2002,7 @@ class PeerReview(db.Model):
     reviewer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     document_path = db.Column(db.String(255), nullable=False)
     remarks = db.Column(db.Text, nullable=True)
-    submission_date = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    submission_date = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
     review_date = db.Column(db.DateTime, nullable=True)
 
     course = db.relationship('Course', backref='peer_reviews')
@@ -1813,7 +2092,7 @@ def submit_review(review_id):
 
     review.reviewer_id = reviewer_id
     review.remarks = remarks
-    review.review_date = datetime.datetime.utcnow()
+    review.review_date = datetime.now()
     db.session.commit()
 
     return jsonify({'message': 'Review submitted successfully'}), 200
@@ -1869,6 +2148,20 @@ class Role(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     admins = db.relationship('Admin', secondary='admin_roles', back_populates='roles')
+    permissions = db.relationship('Permission', secondary='role_permissions', back_populates='roles')
+
+# Role-Permission association table
+role_permissions = db.Table('role_permissions',
+    db.Column('role_id', db.Integer, db.ForeignKey('role.id'), primary_key=True),
+    db.Column('permission_id', db.Integer, db.ForeignKey('permission.id'), primary_key=True)
+)
+
+# Permission model
+class Permission(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    description = db.Column(db.String(200))
+    roles = db.relationship('Role', secondary='role_permissions', back_populates='permissions')
 
 # Instructor model
 class Instructor(db.Model):
@@ -1880,7 +2173,7 @@ class Instructor(db.Model):
     profile_image = db.Column(db.String(200), nullable=True)
     bio = db.Column(db.Text, nullable=True)
     expertise = db.Column(db.String(200), nullable=True)
-    date_created = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    date_created = db.Column(db.DateTime, default=datetime.datetime.now)
     status = db.Column(db.String(50), default='pending')  # pending, approved, rejected, suspended
     approval_date = db.Column(db.DateTime, nullable=True)
     rejection_reason = db.Column(db.Text, nullable=True)
@@ -1897,7 +2190,7 @@ class InstructorRating(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     rating = db.Column(db.Integer, nullable=False)  # 1-5 stars
     review = db.Column(db.Text, nullable=True)
-    date_created = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    date_created = db.Column(db.DateTime, default=datetime.datetime.now)
     
     instructor = db.relationship('Instructor', backref=db.backref('ratings', lazy='dynamic'))
     user = db.relationship('User', backref=db.backref('instructor_ratings', lazy='dynamic'))
@@ -1909,7 +2202,7 @@ class InstructorVerification(db.Model):
     document_type = db.Column(db.String(100), nullable=False)  # id, certificate, resume
     document_url = db.Column(db.String(500), nullable=False)
     verification_status = db.Column(db.String(50), default='pending')  # pending, verified, rejected
-    date_submitted = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    date_submitted = db.Column(db.DateTime, default=datetime.datetime.now)
     date_verified = db.Column(db.DateTime, nullable=True)
     verified_by = db.Column(db.Integer, db.ForeignKey('admin.id'), nullable=True)
     
@@ -2007,6 +2300,43 @@ def admin_required():
         return decorator
     return wrapper
 
+# Helper functions for permissions
+def has_permission(user_or_admin, permission_name):
+    """Check if a user or admin has a specific permission via their roles."""
+    for role in user_or_admin.roles:
+        for permission in role.permissions:
+            if permission.name == permission_name:
+                return True
+    return False
+
+def permission_required(permission_name):
+    """Decorator to require a specific permission to access a route."""
+    def wrapper(fn):
+        @wraps(fn)
+        @jwt_required()
+        def decorator(*args, **kwargs):
+            try:
+                claims = get_jwt()
+                user_id = get_jwt_identity()
+                
+                if claims.get('is_admin', False):
+                    user = Admin.query.get(user_id)
+                else:
+                    user = User.query.get(user_id)
+                    
+                if not user:
+                    return jsonify({"msg": "User not found"}), 404
+                    
+                if has_permission(user, permission_name):
+                    return fn(*args, **kwargs)
+                else:
+                    return jsonify({"msg": "Permission denied"}), 403
+            except Exception as e:
+                print(f"Debug - Exception in permission_required: {str(e)}")
+                return jsonify({"msg": "An error occurred while processing the request"}), 500
+        return decorator
+    return wrapper
+
 # Create role
 @app.route('/admin/roles', methods=['POST'])
 @admin_required()
@@ -2045,7 +2375,18 @@ def delete_role(role_id):
 @admin_required()
 def get_all_admins():
     admins = Admin.query.all()
-    return jsonify([admin.to_dict() for admin in admins]), 200
+    admin_list = [{
+        'id': admin.id,
+        'username': admin.username,
+        'email': admin.email,
+        'fullname': admin.fullname,
+        'phone': admin.phone,
+        'profile_image': admin.profile_image,
+        'created_at': admin.created_at.isoformat() if admin.created_at else None,
+        'updated_at': admin.updated_at.isoformat() if admin.updated_at else None,
+        'roles': [{'id': role.id, 'name': role.name} for role in admin.roles]
+    } for admin in admins]
+    return jsonify(admin_list), 200
 
 # New endpoint: Fetch all roles
 @app.route('/admin/roles', methods=['GET'])
@@ -2164,33 +2505,72 @@ def remove_role_from_admin():
 @jwt_required()
 @admin_required()
 def admin_profile():
+    claims = get_jwt()
+    if not claims.get('is_admin'):
+        return jsonify({'error': 'Unauthorized access'}), 403
+
     admin_id = get_jwt_identity()
     admin = Admin.query.get(admin_id)
     if not admin:
         return jsonify({'error': 'Admin not found'}), 404
 
     if request.method == 'GET':
-        admin_data = {
-            'id': admin.id,
-            'username': admin.username,
-            'fullname': admin.fullname,
-            'email': admin.email,
-            'phone': admin.phone,
-            'profile_image': admin.profile_image,
-            'roles': [{'id': role.id, 'name': role.name} for role in admin.roles]
-        }
-        return jsonify(admin_data), 200
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+
+        query = Admin.query
+        pagination = query.paginate(page=page, per_page=per_page)
+        admins = pagination.items
+
+        admin_list = [{
+            'id': a.id,
+            'username': a.username,
+            'fullname': a.fullname,
+            'email': a.email,
+            'phone': a.phone,
+            'profile_image': a.profile_image,
+            'roles': [{'id': role.id, 'name': role.name} for role in a.roles],
+            'created_at': a.created_at.isoformat() if a.created_at else None,
+            'updated_at': a.updated_at.isoformat() if a.updated_at else None
+        } for a in admins]
+
+        return jsonify({
+            'admins': admin_list,
+            'pagination': {
+                'total_items': pagination.total,
+                'total_pages': pagination.pages,
+                'current_page': page,
+                'per_page': per_page,
+                'has_next': pagination.has_next,
+                'has_prev': pagination.has_prev,
+                'next_page': pagination.next_num if pagination.has_next else None,
+                'prev_page': pagination.prev_num if pagination.has_prev else None
+            }
+        }), 200
 
     if request.method == 'PUT':
         data = request.get_json()
-        admin.username = data.get('username', admin.username)
-        admin.fullname = data.get('fullname', admin.fullname)
-        admin.email = data.get('email', admin.email)
-        admin.phone = data.get('phone', admin.phone)
-        admin.profile_image = data.get('profile_image', admin.profile_image)
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
 
-        db.session.commit()
-        return jsonify({'message': 'Admin profile updated successfully'}), 200
+        # Update fields if provided
+        if 'username' in data:
+            admin.username = data['username']
+        if 'fullname' in data:
+            admin.fullname = data['fullname']
+        if 'email' in data:
+            admin.email = data['email']
+        if 'phone' in data:
+            admin.phone = data['phone']
+        if 'profile_image' in data:
+            admin.profile_image = data['profile_image']
+
+        try:
+            db.session.commit()
+            return jsonify({'message': 'Admin profile updated successfully'}), 200
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 500
 
 
 
@@ -2200,38 +2580,127 @@ def admin_profile():
 @app.route('/admin/instructors', methods=['POST'])
 @admin_required()
 def create_instructor():
-    data = request.get_json()
-    full_name = data.get('full_name')
-    email = data.get('email')
-    phone = data.get('phone')
-    password = data.get('password')
-    profile_image = data.get('profile_image')  # Add profile image
+    try:
+        data = request.get_json()
+        
+        # Validate instructor details (Personal Information)
+        required_instructor_fields = ['full_name', 'email', 'phone', 'password', 'confirm_password']
+        for field in required_instructor_fields:
+            if not data.get(field):
+                return jsonify({'error': f'{field.replace("_", " ").title()} is required'}), 400
 
-    if not full_name or not email or not phone or not password:
-        return jsonify({'error': 'All fields are required'}), 400
+        # Validate password match
+        if data['password'] != data['confirm_password']:
+            return jsonify({'error': 'Passwords do not match'}), 400
 
-    if Instructor.query.filter_by(email=email).first():
-        return jsonify({'error': 'Instructor with this email already exists'}), 400
+        if Instructor.query.filter_by(email=data['email']).first():
+            return jsonify({'error': 'Instructor with this email already exists'}), 400
 
-    hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
+        # Create instructor
+        instructor = Instructor(
+            full_name=data['full_name'],
+            email=data['email'],
+            phone=data['phone'],
+            password=generate_password_hash(data['password'], method='pbkdf2:sha256')
+        )
+        db.session.add(instructor)
+        db.session.flush()  # Get instructor ID without committing
 
-    instructor = Instructor(
-        full_name=full_name,
-        email=email,
-        phone=phone,
-        password=hashed_password,
-        profile_image=profile_image  # Add profile image
-    )
-    db.session.add(instructor)
-    db.session.commit()
+        # Handle course assignment if provided
+        course_data = {
+            'course_category': data.get('course_category'),
+            'course_type': data.get('course_type'),
+            'course_name': data.get('course_name'),
+            'course_title': data.get('course_title'),
+            'amount': data.get('amount'),
+            'brief': data.get('brief'),
+            'number_of_modules': data.get('number_of_modules')
+        }
 
-    return jsonify({'message': 'Instructor created successfully'}), 201
+        # Only process course if any course data is provided
+        if any(course_data.values()):
+            # Validate all course fields are provided
+            for field, value in course_data.items():
+                if not value:
+                    return jsonify({'error': f'{field.replace("_", " ").title()} is required'}), 400
+
+            # Create course
+            course = Course(
+                title=course_data['course_title'],
+                course_name=course_data['course_name'],
+                content='',  # Can be updated later
+                brief=course_data['brief'],
+                number_of_modules=int(course_data['number_of_modules']),
+                course_type=course_data['course_type'],
+                author_id=instructor.id,
+                instructor_id=instructor.id,
+                status='draft',
+                price=float(course_data['amount'])
+            )
+            db.session.add(course)
+            db.session.flush()
+
+            # Create and associate course category
+            category_name = course_data['course_category']
+            category = CourseCategory.query.filter_by(name=category_name).first()
+            if not category:
+                category = CourseCategory(name=category_name)
+                db.session.add(category)
+            
+            course.categories.append(category)
+
+            # Create instructor earning record
+            earning = InstructorEarning(
+                instructor_id=instructor.id,
+                course_id=course.id,
+                amount=float(course_data['amount']),
+                status='pending'
+            )
+            db.session.add(earning)
+
+        db.session.commit()
+
+        response_data = {
+            'message': 'Instructor created successfully',
+            'instructor': {
+                'id': instructor.id,
+                'full_name': instructor.full_name,
+                'email': instructor.email,
+                'phone': instructor.phone
+            }
+        }
+
+        # Add course info to response if course was created
+        if 'course' in locals():
+            response_data['assigned_course'] = {
+                'id': course.id,
+                'title': course.title,
+                'course_name': course.course_name,
+                'course_type': course.course_type,
+                'brief': course.brief,
+                'number_of_modules': course.number_of_modules,
+                'amount': course.price,
+                'status': course.status,
+                'category': category_name
+            }
+
+        return jsonify(response_data), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 # Get all instructors
 @app.route('/admin/instructors', methods=['GET'])
 @admin_required()
 def get_instructors():
-    instructors = Instructor.query.all()
+    # Get pagination parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+
+    # Query with pagination
+    pagination = Instructor.query.paginate(page=page, per_page=per_page, error_out=False)
+    instructors = pagination.items
     instructors_data = []
     
     for instructor in instructors:
@@ -2252,7 +2721,7 @@ def get_instructors():
                 'id': module.id,
                 'name': module.name,
                 'description': module.description
-            } for module in course.modules]
+            } for module in course.modules.order_by(Module.order)]
         } for course in instructor_courses]
 
         # Create instructor data dictionary
@@ -2266,7 +2735,17 @@ def get_instructors():
         }
         instructors_data.append(instructor_data)
 
-    return jsonify(instructors_data), 200
+    # Prepare response with pagination metadata
+    response = {
+        'items': instructors_data,
+        'total_items': pagination.total,
+        'total_pages': pagination.pages,
+        'current_page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }
+    return jsonify(response), 200
 
 # Delete instructor
 @app.route('/admin/instructors/<int:instructor_id>', methods=['DELETE'])
@@ -2370,7 +2849,7 @@ class UserPost(db.Model):
     subject = db.Column(db.String(100), nullable=False)
     doi_link = db.Column(db.String(255), nullable=True)
     video_link = db.Column(db.String(255), nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
     upvote_count = db.Column(db.Integer, default=0)
     downvote_count = db.Column(db.Integer, default=0)
     comment_count = db.Column(db.Integer, default=0)
@@ -2465,23 +2944,25 @@ def get_user_posts():
     claims = get_jwt()
     current_user_email = get_jwt_identity()
     
-    # Show all posts for all authenticated users
-    posts = UserPost.query.order_by(UserPost.created_at.desc()).all()
-    print(f"Number of posts retrieved: {len(posts)}")
-
+    # Get pagination parameters from request
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    
+    # Query with pagination
+    posts_pagination = UserPost.query.order_by(UserPost.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    
     posts_data = []
-    for post in posts:
+    for post in posts_pagination.items:
         # Get post author information
         author = User.query.get(post.user_id)
         if not author:
             print(f"Author not found for post ID: {post.id}")
             continue  # Skip posts where author doesn't exist
-
-        print(f"Processing post ID: {post.id} by author: {author.full_name}")
         
         author_info = {
             'id': author.id,
             'full_name': author.full_name,
+            'email': author.email,
             'profile_image': author.profile_image
         }
 
@@ -2502,7 +2983,7 @@ def get_user_posts():
             'doi_link': post.doi_link,
             'video_link': post.video_link,
             'document_path': post.document_path,
-            'created_at': post.created_at,
+            'created_at': post.created_at.isoformat() if post.created_at else None,
             'upvote_count': post.upvote_count,
             'downvote_count': post.downvote_count,
             'comment_count': post.comment_count,
@@ -2512,7 +2993,23 @@ def get_user_posts():
         }
         posts_data.append(post_data)
 
-    return jsonify(posts_data), 200
+    # Prepare response with pagination information
+    response = {
+        'status': 'success',
+        'data': {
+            'posts': posts_data,
+            'pagination': {
+                'total_posts': posts_pagination.total,
+                'total_pages': posts_pagination.pages,
+                'current_page': posts_pagination.page,
+                'per_page': posts_pagination.per_page,
+                'has_next': posts_pagination.has_next,
+                'has_prev': posts_pagination.has_prev
+            }
+        }
+    }
+
+    return jsonify(response), 200
 
 @app.route('/user/posts/<int:post_id>', methods=['GET'])
 @jwt_required()
@@ -2777,7 +3274,7 @@ class Certificate(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
     certificate_url = db.Column(db.String(500), nullable=False)
-    issue_date = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    issue_date = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
     certificate_number = db.Column(db.String(100), unique=True, nullable=False)
     
     # Relationships
@@ -2790,7 +3287,7 @@ class InstructorEarning(db.Model):
     instructor_id = db.Column(db.Integer, db.ForeignKey('instructor.id'), nullable=False)
     amount = db.Column(db.Float, nullable=False)
     course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
-    transaction_date = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    transaction_date = db.Column(db.DateTime, default=datetime.datetime.now)
     status = db.Column(db.String(50), default='pending')  # pending, completed, withdrawn
 
 class Transaction(db.Model):
@@ -2799,7 +3296,7 @@ class Transaction(db.Model):
     amount = db.Column(db.Float, nullable=False)
     transaction_type = db.Column(db.String(50))  # withdrawal, earning
     status = db.Column(db.String(50))  # pending, completed, failed
-    transaction_date = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    transaction_date = db.Column(db.DateTime, default=datetime.datetime.now)
     withdrawal_method = db.Column(db.String(100), nullable=True)
     account_details = db.Column(db.String(255), nullable=True)
 
@@ -2913,6 +3410,65 @@ def get_certificate(certificate_number):
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 # After this existing instructor login endpoint...
+@app.route('/instructor/courses', methods=['GET'])
+@jwt_required()
+def get_instructor_courses():
+    try:
+        # Get all courses that are not admin-authored (i.e. instructor courses)
+        courses = Course.query.filter_by(is_admin_author=False).all()
+        courses_data = []
+
+        for course in courses:
+            # Get instructor information
+            instructor = Instructor.query.get(course.instructor_id or course.author_id)
+            if not instructor:
+                continue
+
+            # Get modules with descriptions
+            modules_data = [{
+                'id': module.id,
+                'name': module.name,
+                'title': module.title,
+                'description': module.description,
+                'order': module.order,
+                'media_file': module.media_file,
+                'additional_resources': module.additional_resources
+            } for module in course.modules.order_by(Module.order)]
+
+            course_dict = {
+                'id': course.id,
+                'title': course.title,
+                'course_name': course.course_name,
+                'image': course.image,
+                'content': course.content,
+                'video': course.video,
+                'brief': course.brief,
+                'number_of_modules': course.number_of_modules,
+                'course_type': course.course_type,
+                'price': course.price,
+                'status': course.status,
+                'additional_resources': course.additional_resources,
+                'date_created': course.date_created.isoformat() if course.date_created else None,
+                'last_updated': course.last_updated.isoformat() if course.last_updated else None,
+                'categories': [category.name for category in course.categories],
+                'modules': modules_data,
+                'student_count': course.student_count,
+                'instructor': {
+                    'id': instructor.id,
+                    'name': instructor.full_name,
+                    'email': instructor.email
+                }
+            }
+            courses_data.append(course_dict)
+
+        return jsonify({
+            'total_courses': len(courses_data),
+            'courses': courses_data
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
+
 @app.route('/instructor/students', methods=['GET'])
 @jwt_required()
 def get_instructor_students():
@@ -2958,8 +3514,19 @@ def get_instructor_students():
                     students_data.append(student_data)
         
         return jsonify({
+            'instructor': {
+                'id': instructor.id,
+                'name': instructor.full_name,
+                'email': instructor.email
+            },
             'total_students': len(students_data),
-            'students': students_data
+            'students': [{
+                'student_id': student['student_id'],
+                'full_name': student['full_name'],
+                'email': student['email'],
+                'phone_number': student['phone_number'],
+                 'courses': student['courses']
+            } for student in students_data]
         }), 200
 
     except Exception as e:
@@ -3063,6 +3630,7 @@ def rate_instructor(instructor_id):
         
     rating = data.get('rating')
     review = data.get('review')
+    
     
     if not isinstance(rating, int) or rating < 1 or rating > 5:
         return jsonify({'error': 'Rating must be between 1 and 5'}), 400
@@ -3350,7 +3918,7 @@ class PostVote(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey('user_post.id'), nullable=False)
     vote_type = db.Column(db.String(10), nullable=False)  # 'upvote' or 'downvote'
-    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now)
     
     user = db.relationship('User', backref=db.backref('post_votes', lazy='dynamic'))
     post = db.relationship('UserPost', backref=db.backref('votes', lazy='dynamic'))
@@ -3361,7 +3929,7 @@ class PostComment(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey('user_post.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now)
     
     user = db.relationship('User', backref=db.backref('post_comments', lazy='dynamic'))
     post = db.relationship('UserPost', backref=db.backref('comments', lazy='dynamic'))
@@ -3582,6 +4150,7 @@ def follow_subject(subject_id):
 
     user.followed_subjects.append(subject)
     db.session.commit()
+
     return jsonify({'message': f'Now following subject: {subject.name}'}), 200
 
 @app.route('/subjects/<int:subject_id>/unfollow', methods=['POST'])
@@ -3597,10 +4166,11 @@ def unfollow_subject(subject_id):
         return jsonify({'error': 'Subject not found'}), 404
 
     if subject not in user.followed_subjects:
-        return jsonify({'message': 'Not following this subject'}), 400
+        return jsonify({'message': 'Not following this subject'}), 200
 
     user.followed_subjects.remove(subject)
     db.session.commit()
+
     return jsonify({'message': f'Unfollowed subject: {subject.name}'}), 200
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -3677,7 +4247,952 @@ def get_recommended_posts():
 
     return jsonify(scored_posts), 200
 
+# Statistics Endpoints
+@app.route('/api/statistics/overview', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_platform_statistics():
+    try:
+        # Overall platform statistics
+        total_users = User.query.count()
+        total_courses = Course.query.count()
+        total_instructors = Instructor.query.count()
+        total_admins = Admin.query.count()
+        total_categories = CourseCategory.query.count()
+        
+        # Active users in last 30 days based on last_login
+        thirty_days_ago = datetime.datetime.now() - timedelta(days=30)
+        active_users = User.query.filter(User.last_login >= thirty_days_ago).count()
+        
+        # Course enrollment statistics
+        try:
+            total_enrollments = db.session.query(func.count(enrollment_table.c.user_id)).scalar() or 0
+        except Exception:
+            total_enrollments = 0
+        
+        response_data = {
+            'platform_overview': {
+                'total_users': total_users or 0,
+                'total_courses': total_courses or 0,
+                'total_instructors': total_instructors or 0,
+                'total_admins': total_admins or 0,
+                'total_categories': total_categories or 0,
+                'active_users_30d': active_users or 0,
+                'total_enrollments': total_enrollments or 0
+            }
+        }
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        print(f"Error in get_platform_statistics: {str(e)}")
+        db.session.rollback()
+        return jsonify({
+            'error': 'An error occurred while fetching statistics',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/statistics/courses', methods=['GET'])
+@jwt_required()
+def get_course_statistics():
+    try:
+        # Course statistics by category
+        category_stats = db.session.query(
+            CourseCategory.name,
+            func.count(Course.id).label('course_count')
+        ).join(
+            course_category_association,
+            CourseCategory.id == course_category_association.c.category_id
+        ).join(
+            Course,
+            Course.id == course_category_association.c.course_id
+        ).group_by(CourseCategory.name).all()
+        
+        # Course price distribution
+        price_ranges = [
+            {'min': 0, 'max': 0, 'label': 'Free'},
+            {'min': 1, 'max': 50, 'label': '$1-$50'},
+            {'min': 51, 'max': 100, 'label': '$51-$100'},
+            {'min': 101, 'max': float('inf'), 'label': '$100+'}
+        ]
+        
+        price_distribution = []
+        for price_range in price_ranges:
+            query = Course.query
+            if price_range['max'] == float('inf'):
+                count = query.filter(Course.price > price_range['min']).count()
+            elif price_range['min'] == price_range['max']:
+                count = query.filter(Course.price == 0).count()
+            else:
+                count = query.filter(
+                    Course.price.between(price_range['min'], price_range['max'])
+                ).count()
+            price_distribution.append({
+                'label': price_range['label'],
+                'count': count
+            })
+        
+        # Most popular courses
+        popular_courses = db.session.query(
+            Course,
+            func.count(enrollment_table.c.user_id).label('student_count')
+        ).join(
+            enrollment_table
+        ).group_by(Course.id).order_by(text('student_count DESC')).limit(10).all()
+        
+        return jsonify({
+            'category_distribution': [
+                {'category': cat, 'count': count}
+                for cat, count in category_stats
+            ],
+            'price_distribution': price_distribution,
+            'popular_courses': [{
+                'id': course.id,
+                'title': course.title,
+                'student_count': count,
+                'instructor': course.author.full_name if course.author else 'Unknown'
+            } for course, count in popular_courses]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/statistics/instructors', methods=['GET'])
+@jwt_required()
+def get_instructor_statistics():
+    try:
+        # Overall instructor metrics
+        total_instructors = Instructor.query.count()
+        active_instructors = Instructor.query.filter_by(status='approved').count()
+        pending_instructors = Instructor.query.filter_by(status='pending').count()
+        
+        # Top instructors by student count
+        top_instructors = db.session.query(
+            Instructor,
+            func.count(distinct(enrollment_table.c.user_id)).label('total_students'),
+            func.count(distinct(Course.id)).label('course_count')
+        ).join(
+            Course,
+            Course.author_id == Instructor.id
+        ).join(
+            enrollment_table,
+            enrollment_table.c.course_id == Course.id
+        ).group_by(Instructor.id).order_by(text('total_students DESC')).limit(10).all()
+        
+        # Rating distribution
+        rating_distribution = db.session.query(
+            func.round(InstructorRating.rating).label('rating'),
+            func.count().label('count')
+        ).group_by(
+            func.round(InstructorRating.rating)
+        ).all()
+        
+        return jsonify({
+            'overall_metrics': {
+                'total_instructors': total_instructors,
+                'active_instructors': active_instructors,
+                'pending_instructors': pending_instructors
+            },
+            'top_instructors': [{
+                'id': instructor.id,
+                'name': instructor.full_name,
+                'total_students': total_students,
+                'course_count': course_count,
+                'average_rating': instructor.average_rating
+            } for instructor, total_students, course_count in top_instructors],
+            'rating_distribution': [{
+                'rating': int(rating),
+                'count': count
+            } for rating, count in rating_distribution]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/statistics/students', methods=['GET'])
+@jwt_required()
+def get_student_statistics():
+    try:
+        # Overall student metrics
+        total_students = User.query.count()
+        
+        # Students by course enrollment count
+        enrollment_distribution = db.session.query(
+            func.count(enrollment_table.c.course_id).label('courses_enrolled'),
+            func.count(distinct(enrollment_table.c.user_id)).label('student_count')
+        ).group_by(
+            enrollment_table.c.user_id
+        ).group_by(
+            text('courses_enrolled')
+        ).order_by(
+            text('courses_enrolled')
+        ).all()
+        
+        # Most engaged students (by number of courses enrolled)
+        top_students = db.session.query(
+            User,
+            func.count(enrollment_table.c.course_id).label('course_count')
+        ).join(
+            enrollment_table,
+            enrollment_table.c.user_id == User.id
+        ).group_by(User.id).order_by(text('course_count DESC')).limit(10).all()
+        
+        # Student geographical distribution (if location data is available)
+        geographical_distribution = db.session.query(
+            Location.country_region,
+            func.count(User.id).label('user_count')
+        ).join(
+            User,
+            User.id == Location.user_id
+        ).group_by(Location.country_region).all()
+        
+        return jsonify({
+            'overall_metrics': {
+                'total_students': total_students
+            },
+            'enrollment_distribution': [{
+                'courses_enrolled': courses,
+                'student_count': count
+            } for courses, count in enrollment_distribution],
+            'top_students': [{
+                'id': student.id,
+                'name': student.full_name,
+                'courses_enrolled': course_count
+            } for student, course_count in top_students],
+            'geographical_distribution': [{
+                'region': region or 'Unknown',
+                'count': count
+            } for region, count in geographical_distribution]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/statistics/admins', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_admin_statistics():
+    try:
+        # Overall admin metrics
+        total_admins = Admin.query.count()
+        
+        # Admins by role
+        role_distribution = db.session.query(
+            Role.name,
+            func.count(distinct(admin_roles.c.admin_id)).label('admin_count')
+        ).join(
+            admin_roles,
+            Role.id == admin_roles.c.role_id
+        ).group_by(Role.name).all()
+        
+        # Admin activity (if you track admin actions)
+        # This is a placeholder - implement based on your admin activity tracking
+        recent_activities = []
+        
+        return jsonify({
+            'overall_metrics': {
+                'total_admins': total_admins
+            },
+            'role_distribution': [{
+                'role': role,
+                'count': count
+            } for role, count in role_distribution],
+            'recent_activities': recent_activities
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/statistics/categories', methods=['GET'])
+@jwt_required()
+def get_category_statistics():
+    try:
+        # Category metrics
+        category_stats = db.session.query(
+            CourseCategory.name,
+            func.count(distinct(Course.id)).label('course_count'),
+            func.count(distinct(enrollment_table.c.user_id)).label('student_count')
+        ).join(
+            course_category_association,
+            CourseCategory.id == course_category_association.c.category_id
+        ).join(
+            Course,
+            Course.id == course_category_association.c.course_id
+        ).outerjoin(
+            enrollment_table,
+            enrollment_table.c.course_id == Course.id
+        ).group_by(CourseCategory.name).all()
+        
+        # Average course rating by category
+        category_ratings = db.session.query(
+            CourseCategory.name,
+            func.avg(InstructorRating.rating).label('avg_rating')
+        ).join(
+            course_category_association,
+            CourseCategory.id == course_category_association.c.category_id
+        ).join(
+            Course,
+            Course.id == course_category_association.c.course_id
+        ).join(
+            Instructor,
+            Course.author_id == Instructor.id
+        ).join(
+            InstructorRating,
+            InstructorRating.instructor_id == Instructor.id
+        ).group_by(CourseCategory.name).all()
+        
+        return jsonify({
+            'category_metrics': [{
+                'category': name,
+                'course_count': course_count,
+                'student_count': student_count
+            } for name, course_count, student_count in category_stats],
+            'category_ratings': [{
+                'category': name,
+                'average_rating': float(avg_rating) if avg_rating else 0
+            } for name, avg_rating in category_ratings]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/statistics/time-series', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_time_series_statistics():
+    try:
+        # Get date range from query parameters (default to last 30 days)
+        days = request.args.get('days', 30, type=int)
+        end_date = datetime.datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Daily new user registrations
+        new_users = db.session.query(
+            func.date(User.date_created).label('date'),
+            func.count().label('count')
+        ).filter(
+            User.date_created.between(start_date, end_date)
+        ).group_by(
+            func.date(User.date_created)
+        ).all()
+        
+        # Daily new course enrollments
+        new_enrollments = db.session.query(
+            func.date(enrollment_table.c.enrollment_date).label('date'),
+            func.count().label('count')
+        ).filter(
+            enrollment_table.c.enrollment_date.between(start_date, end_date)
+        ).group_by(
+            func.date(enrollment_table.c.enrollment_date)
+        ).all()
+        
+        # Daily new courses
+        new_courses = db.session.query(
+            func.date(Course.date_created).label('date'),
+            func.count().label('count')
+        ).filter(
+            Course.date_created.between(start_date, end_date)
+        ).group_by(
+            func.date(Course.date_created)
+        ).all()
+        
+        return jsonify({
+            'new_users': [{
+                'date': date.isoformat(),
+                'count': count
+            } for date, count in new_users],
+            'new_enrollments': [{
+                'date': date.isoformat(),
+                'count': count
+            } for date, count in new_enrollments],
+            'new_courses': [{
+                'date': date.isoformat(),
+                'count': count
+            } for date, count in new_courses]
+        }), 200
+    except Exception as e:
+        print(f"Error in get_time_series_statistics: {str(e)}")
+        db.session.rollback()
+        return jsonify({
+            'error': 'An error occurred while fetching time series statistics',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/test-db', methods=['GET'])
+@jwt_required()
+@admin_required()
+def test_database():
+    try:
+        # Test basic queries
+        user_count = User.query.count()
+        course_count = Course.query.count()
+        
+        return jsonify({
+            'status': 'success',
+            'user_count': user_count,
+            'course_count': course_count
+        }), 200
+    except Exception as e:
+        print(f"Database test error: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# Get all permissions
+@app.route('/admin/permissions', methods=['GET'])
+@admin_required()
+def get_all_permissions():
+    permissions = Permission.query.all()
+    return jsonify([{
+        'id': permission.id, 
+        'name': permission.name,
+        'description': permission.description
+    } for permission in permissions]), 200
+
+# Create permission
+@app.route('/admin/permissions', methods=['POST'])
+@admin_required()
+def create_permission():
+    data = request.get_json()
+    name = data.get('name')
+    description = data.get('description', '')
+
+    if not name:
+        return jsonify({'error': 'Permission name is required'}), 400
+
+    if Permission.query.filter_by(name=name).first():
+        return jsonify({'error': 'Permission already exists'}), 400
+
+    permission = Permission(name=name, description=description)
+    db.session.add(permission)
+    db.session.commit()
+
+    return jsonify({'message': 'Permission created successfully', 'permission': {
+        'id': permission.id,
+        'name': permission.name,
+        'description': permission.description
+    }}), 201
+
+# Update permission
+@app.route('/admin/permissions/<int:permission_id>', methods=['PUT'])
+@admin_required()
+def update_permission(permission_id):
+    permission = Permission.query.get(permission_id)
+    if not permission:
+        return jsonify({'error': 'Permission not found'}), 404
+
+    data = request.get_json()
+    if 'name' in data:
+        if Permission.query.filter_by(name=data['name']).first() and permission.name != data['name']:
+            return jsonify({'error': 'Permission name already exists'}), 400
+        permission.name = data['name']
+    
+    if 'description' in data:
+        permission.description = data['description']
+
+    db.session.commit()
+    return jsonify({'message': 'Permission updated successfully', 'permission': {
+        'id': permission.id,
+        'name': permission.name,
+        'description': permission.description
+    }}), 200
+
+# Delete permission
+@app.route('/admin/permissions/<int:permission_id>', methods=['DELETE'])
+@admin_required()
+def delete_permission(permission_id):
+    permission = Permission.query.get(permission_id)
+    if not permission:
+        return jsonify({'error': 'Permission not found'}), 404
+
+    db.session.delete(permission)
+    db.session.commit()
+    return jsonify({'message': 'Permission deleted successfully'}), 200
+
+# Assign permission to role
+@app.route('/admin/assign-permission', methods=['POST'])
+@admin_required()
+def assign_permission_to_role():
+    data = request.get_json()
+    role_id = data.get('role_id')
+    permission_id = data.get('permission_id')
+    
+    if not role_id or not permission_id:
+        return jsonify({'error': 'Role ID and Permission ID are required'}), 400
+    
+    role = Role.query.get(role_id)
+    permission = Permission.query.get(permission_id)
+    
+    if not role or not permission:
+        return jsonify({'error': 'Role or Permission not found'}), 404
+    
+    if permission in role.permissions:
+        return jsonify({'message': 'Role already has this permission'}), 200
+    
+    role.permissions.append(permission)
+    db.session.commit()
+    
+    return jsonify({'message': 'Permission assigned to role successfully'}), 200
+
+# Remove permission from role
+@app.route('/admin/remove-permission', methods=['POST'])
+@admin_required()
+def remove_permission_from_role():
+    data = request.get_json()
+    role_id = data.get('role_id')
+    permission_id = data.get('permission_id')
+    
+    if not role_id or not permission_id:
+        return jsonify({'error': 'Role ID and Permission ID are required'}), 400
+    
+    role = Role.query.get(role_id)
+    permission = Permission.query.get(permission_id)
+    
+    if not role or not permission:
+        return jsonify({'error': 'Role or Permission not found'}), 404
+    
+    if permission not in role.permissions:
+        return jsonify({'message': 'Role does not have this permission'}), 200
+    
+    role.permissions.remove(permission)
+    db.session.commit()
+    
+    return jsonify({'message': 'Permission removed from role successfully'}), 200
+
+# Get role permissions
+@app.route('/admin/role-permissions/<int:role_id>', methods=['GET'])
+@admin_required()
+def get_role_permissions(role_id):
+    role = Role.query.get(role_id)
+    if not role:
+        return jsonify({'error': 'Role not found'}), 404
+    
+    permissions = [{
+        'id': permission.id,
+        'name': permission.name,
+        'description': permission.description
+    } for permission in role.permissions]
+    
+    return jsonify(permissions), 200
+
+@app.route('/courses/with-modules', methods=['POST'])
+@jwt_required()
+def create_course_with_modules():
+    try:
+        # Get current user from token
+        current_user_id = get_jwt_identity()
+        
+        # Check if user is admin or instructor directly without User model
+        admin = Admin.query.filter_by(id=current_user_id).first()
+        instructor = Instructor.query.filter_by(id=current_user_id).first()
+        
+        if not admin and not instructor:
+            return jsonify({'error': 'Only admins and instructors can create courses'}), 403
+
+        data = request.get_json()
+        
+        # Validate course data exists
+        if 'course' not in data:
+            return jsonify({'error': 'Course data is required'}), 400
+            
+        course_data = data['course']
+        
+        # Validate required course fields
+        required_fields = ['titles', 'course_name', 'content', 'price']
+        for field in required_fields:
+            if field not in course_data:
+                return jsonify({'error': f'Missing required course field: {field}'}), 400
+
+        # Create new course
+        course = Course(
+            title=course_data['titles'],
+            course_name=course_data['course_name'],
+            content=course_data['content'],
+            price=course_data['price'],
+            brief=course_data.get('brief'),
+            course_type=course_data.get('course_type'),
+            additional_resources=course_data.get('additional_resources'),
+            author_id=admin.id if admin else instructor.id,  # Set the actual admin/instructor ID
+            instructor_id=instructor.id if instructor else None
+        )
+        
+        db.session.add(course)
+        db.session.flush()  # This assigns an ID to the course
+        
+        # Handle modules if provided
+        if 'modules' in data and isinstance(data['modules'], list):
+            for module_data in data['modules']:
+                # Validate required module fields
+                if not all(key in module_data for key in ['name', 'title', 'description', 'content']):
+                    return jsonify({'error': 'Each module must have name, title, description, and content'}), 400
+                    
+                module = Module(
+                    name=module_data['name'],
+                    title=module_data['title'],
+                    description=module_data['description'],
+                    content=module_data['content'],
+                    additional_resources=module_data.get('additional_resources'),
+                    media_file=module_data.get('media_file'),
+                    order=module_data.get('order', 0),
+                    course_id=course.id
+                )
+                db.session.add(module)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Course and modules created successfully',
+            'course_id': course.id
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/courses/<int:course_id>/assign-module/<int:module_id>', methods=['POST'])
+@jwt_required()
+def assign_module_to_course(course_id, module_id):
+    try:
+        # Get the course and module
+        course = Course.query.get_or_404(course_id)
+        module = Module.query.get_or_404(module_id)
+        
+        # Check if module is already assigned to this course
+        if module.course_id == course_id:
+            return jsonify({'message': 'Module is already assigned to this course'}), 400
+            
+        # If module is a template, create a new instance
+        if module.is_template:
+            new_module = Module(
+                name=module.name,
+                title=module.title,
+                description=module.description,
+                content=module.content,
+                course_id=course_id,
+                order=len(course.modules.all()) + 1,  # Add at the end
+                additional_resources=module.additional_resources,
+                media_file=module.media_file,
+                is_template=False
+            )
+            db.session.add(new_module)
+        else:
+            # If module is not a template, just update its course
+            module.course_id = course_id
+            module.order = len(course.modules.all()) + 1
+            
+        # Update course module count
+        course.number_of_modules = len(course.modules.all()) + 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Module assigned to course successfully',
+            'module_id': new_module.id if module.is_template else module.id
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/assign-course', methods=['POST'])
+@jwt_required()
+@admin_required()
+def assign_course():
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['course_id', 'instructor_id', 'amount']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        # Validate amount is a positive number
+        try:
+            amount = float(data['amount'])
+            if amount <= 0:
+                return jsonify({'error': 'Amount must be greater than 0'}), 400
+        except ValueError:
+            return jsonify({'error': 'Invalid amount value'}), 400
+
+        # Get course and instructor
+        course = Course.query.get(data['course_id'])
+        instructor = Instructor.query.get(data['instructor_id'])
+
+        if not course:
+            return jsonify({'error': 'Course not found'}), 404
+        if not instructor:
+            return jsonify({'error': 'Instructor not found'}), 404
+
+        # Check if course is already assigned
+        if course.instructor_id:
+            return jsonify({'error': 'Course is already assigned to an instructor'}), 400
+
+        # Update course with instructor
+        course.instructor_id = instructor.id
+        
+        # Create instructor earning record
+        earning = InstructorEarning(
+            instructor_id=instructor.id,
+            course_id=course.id,
+            amount=amount,
+            status='pending'
+        )
+
+        db.session.add(earning)
+        db.session.commit()
+
+        # Create notification for instructor
+        notification = Notification(
+            user_id=instructor.id,
+            content=f'You have been assigned to teach the course: {course.title}',
+            is_read=False
+        )
+        db.session.add(notification)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Course assigned successfully',
+            'data': {
+                'course_id': course.id,
+                'course_title': course.title,
+                'instructor_id': instructor.id,
+                'instructor_name': instructor.full_name,
+                'amount': amount
+            }
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/course-dropdown-data', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_course_dropdown_data():
+    try:
+        # Get all course categories
+        categories = CourseCategory.query.all()
+        categories_data = [{'id': cat.id, 'name': cat.name} for cat in categories]
+
+        # Get all courses for name and title dropdowns
+        courses = Course.query.all()
+        courses_data = [{
+            'id': course.id,
+            'title': course.title,
+            'course_name': course.course_name,
+            'category_id': course.categories[0].id if course.categories else None,
+            'course_type': course.course_type
+        } for course in courses]
+
+        # Get unique course types
+        course_types = db.session.query(Course.course_type).distinct().all()
+        course_types = [type[0] for type in course_types if type[0]]
+
+        return jsonify({
+            'categories': categories_data,
+            'courses': courses_data,
+            'course_types': course_types
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Get all course categories
+@app.route('/admin/course-categories', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_course_categories():
+    categories = CourseCategory.query.all()
+    return jsonify([{'id': c.id, 'name': c.name} for c in categories]), 200
+
+# Get course types for a selected category
+@app.route('/admin/course-types', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_course_types():
+    category_id = request.args.get('category_id', type=int)
+    if not category_id:
+        return jsonify({'error': 'category_id is required'}), 400
+    types = db.session.query(Course.course_type).join(Course.categories).filter(CourseCategory.id == category_id).distinct().all()
+    return jsonify([t[0] for t in types if t[0]]), 200
+
+# Get course names for a selected category and type
+@app.route('/admin/course-names', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_course_names():
+    category_id = request.args.get('category_id', type=int)
+    course_type = request.args.get('course_type')
+    if not category_id or not course_type:
+        return jsonify({'error': 'category_id and course_type are required'}), 400
+    names = db.session.query(Course.course_name).join(Course.categories).filter(CourseCategory.id == category_id, Course.course_type == course_type).distinct().all()
+    return jsonify([n[0] for n in names if n[0]]), 200
+
+# Get course titles for a selected category, type, and name
+@app.route('/admin/course-titles', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_course_titles():
+    category_id = request.args.get('category_id', type=int)
+    course_type = request.args.get('course_type')
+    course_name = request.args.get('course_name')
+    if not category_id or not course_type or not course_name:
+        return jsonify({'error': 'category_id, course_type, and course_name are required'}), 400
+    titles = db.session.query(Course.id, Course.title).join(Course.categories).filter(
+        CourseCategory.id == category_id,
+        Course.course_type == course_type,
+        Course.course_name == course_name
+    ).all()
+    return jsonify([{'id': t[0], 'title': t[1]} for t in titles]), 200
+
+# Get all available instructors
+@app.route('/admin/instructors-list', methods=['GET'])
+@jwt_required()
+@admin_required()
+def get_instructors_list():
+    try:
+        instructors = Instructor.query.all()
+        return jsonify([{
+            'id': instructor.id,
+            'full_name': instructor.full_name,
+            'email': instructor.email,
+            'expertise': instructor.expertise
+        } for instructor in instructors]), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/courses/<int:course_id>/module-count', methods=['GET'])
+def get_course_module_count(course_id):
+    try:
+        with app.app_context():
+            course = Course.query.get(course_id)
+            if not course:
+                return jsonify({'error': 'Course not found'}), 404
+
+            result = {
+                'course_id': course_id,
+                'number_of_modules': course.number_of_modules
+            }
+            return jsonify(result), 200
+    except Exception as e:
+        app.logger.error(f"Error getting module count: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        db.session.close()
+
+@app.route('/instructor/course-upload-options', methods=['GET'])
+@jwt_required()
+def get_instructor_course_options():
+    try:
+        # Get instructor from token
+        current_user_id = get_jwt_identity()
+        instructor = Instructor.query.filter_by(email=User.query.get(current_user_id).email).first()
+        
+        if not instructor:
+            return jsonify({'error': 'Only instructors can access this endpoint'}), 403
+
+        # Get all categories (added by admin)
+        categories = CourseCategory.query.all()
+        categories_data = [{'id': cat.id, 'name': cat.name} for cat in categories]
+
+        # Define available module counts (you can adjust this range)
+        module_counts = list(range(1, 21))  # Allows 1 to 20 modules
+
+        return jsonify({
+            'categories': categories_data,
+            'module_counts': module_counts
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Error getting course upload options: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/instructor/upload-course', methods=['POST'])
+@jwt_required()
+def instructor_upload_course():
+    try:
+        # Get instructor directly from token
+        instructor_id = get_jwt_identity()
+        instructor = Instructor.query.get(instructor_id)
+        
+        if not instructor:
+            return jsonify({'error': 'Only instructors can upload courses'}), 403
+
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['titles', 'course_name', 'content', 'price', 'category_id', 'number_of_modules']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        # Validate titles array
+        if not isinstance(data['titles'], list) or len(data['titles']) == 0:
+            return jsonify({'error': 'Titles must be a non-empty array'}), 400
+
+        # Validate category exists
+        category = CourseCategory.query.get(data['category_id'])
+        if not category:
+            return jsonify({'error': 'Invalid category'}), 400
+
+        # Validate number_of_modules is in acceptable range
+        if not (1 <= data['number_of_modules'] <= 20):
+            return jsonify({'error': 'Number of modules must be between 1 and 20'}), 400
+
+        # Create courses for each title
+        created_courses = []
+        for title in data['titles']:
+            course = Course(
+                title=title,
+                course_name=data['course_name'],
+                content=data['content'],
+                price=data['price'],
+                brief=data.get('brief'),
+                course_type=data.get('course_type'),
+                additional_resources=data.get('additional_resources'),
+                author_id=instructor.id,
+                instructor_id=instructor.id,
+                number_of_modules=data['number_of_modules'],
+                status='draft'  # Default status for instructor uploads
+            )
+            
+            # Add category
+            course.categories.append(category)
+
+            # Handle image if provided in base64
+            if 'image_base64' in data:
+                try:
+                    # Save base64 image and set course.image path
+                    image_data = data['image_base64'].split(',')[1]
+                    image_binary = base64.b64decode(image_data)
+                    filename = f"course_{int(time.time())}_{secure_filename(title)}.jpg"
+                    image_path = os.path.join(app.config['UPLOAD_FOLDER'], 'courses', filename)
+                    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+                    
+                    with open(image_path, 'wb') as f:
+                        f.write(image_binary)
+                    
+                    course.image = f'courses/{filename}'
+                except Exception as e:
+                    app.logger.error(f"Error processing image: {str(e)}")
+
+            db.session.add(course)
+            db.session.flush()  # Ensure course.id is assigned
+            created_courses.append({
+                'id': course.id,
+                'title': course.title
+            })
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Courses created successfully',
+            'courses': created_courses
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error creating courses: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=True, threaded=True)
