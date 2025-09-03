@@ -1,0 +1,15 @@
+export { default as AdminOverviewPage } from "./Overview/overview";
+export { default as AdminCoursePage } from "./Courses/courses";
+export { default as AdminCreateCoursePage } from "./Courses/create";
+export { default as AdminInstructorsPage } from "./Instructors/instructors";
+export { default as AdminTutorWalletPage } from "./Wallet/wallet";
+export { default as AdminSettingsPage } from "./Settings/settings";
+export { default as AdminEditUserPage } from "./Settings/edit";
+export { default as AdminStudentsPage } from "./Instructors/students";
+export { default as AdminBlogPage } from "./Blogs/blogs";
+export { default as AdminCreateBlogPage } from "./Blogs/create";
+export { default as AdminCategoriesPage } from "./Categories/categories";
+export { default as AdminCreateCategoryPage } from "./Categories/create";
+export { default as AdminCreateInstructorPage } from "./Instructors/create";
+export { default as AdminLogin } from "./Login/Loginpage";
+export { default as AdminSubjectsIndustriesUploadPage } from "./SubjectsIndustries/upload";

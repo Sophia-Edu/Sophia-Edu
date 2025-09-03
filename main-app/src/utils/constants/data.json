@@ -1,0 +1,11 @@
+{
+	"courses": [
+		{
+			"category": "learning_development_courses",
+			"course_type": "Applied Science",
+			"course_name": "Agriculture",
+			"course_titles": ["Aeroponics", "Agroecology", "Agrology"]
+		},
+		{ "category": "entrepreneurship_and_innovation_courses" }
+	]
+}

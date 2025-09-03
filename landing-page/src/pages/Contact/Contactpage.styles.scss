@@ -1,0 +1,48 @@
+.contact {
+	background: #f5f5f5;
+	h2 {
+		font-size: 40px;
+		margin: 30px 0;
+	}
+	.img_contain {
+		height: 317px;
+		border-radius: 10px;
+		overflow: hidden; /* Hide overflowing parts */
+		position: relative;
+		margin: 30px 0;
+		img {
+			width: 100%; /* Make sure image fills contain width */
+			height: 100%; /* Make sure image fills contain height */
+			object-fit: cover; /* Cover the contain, maintaining aspect ratio */
+			position: absolute; /* Position image relative to contain */
+			top: 0;
+			left: 0;
+		}
+	}
+	.contain {
+		width: 85%;
+		min-height: 60vh;
+		// background-color: red;
+		margin: auto !important;
+		padding: 20px 0;
+	}
+	.bottom {
+		min-height: 500px;
+		padding: 60px 100px;
+		@media (max-width: 768px) {
+			padding: 50px;
+		}
+		h2 {
+			font-size: 16px;
+		}
+		p {
+			font-size: 14px;
+			margin: 20px 0;
+		}
+		.flex {
+			display: flex;
+			align-items: center;
+			gap: 20px;
+		}
+	}
+}

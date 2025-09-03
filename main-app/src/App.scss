@@ -1,0 +1,213 @@
+
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+html {
+	scroll-behavior: smooth;
+}
+
+body {
+	background: #b6b6b640;
+	font-family: inter !important;
+}
+
+li,
+p,
+button {
+	font-family: "Inter" !important;
+	font-weight: 400;
+	font-size: 16px;
+	line-height: 25.89px;
+	@media (max-width: 480px) {
+		font-size: 12px;
+	}
+}
+:where(.css-dev-only-do-not-override-mzwlov).ant-menu-horizontal {
+	border-bottom: none !important;
+}
+:where(.css-dev-only-do-not-override-mzwlov).ant-layout-footer {
+	padding: unset;
+}
+:where(.css-dev-only-do-not-override-mzwlov).ant-select-outlined:not(
+		.ant-select-customize-input
+	)
+	.ant-select-selector {
+	background: transparent !important;
+	border-radius: 20px !important;
+}
+:where(.css-dev-only-do-not-override-mzwlov).ant-card .ant-card-meta {
+	margin: 10px 0 !important;
+}
+
+:where(.css-dev-only-do-not-override-mzwlov).ant-card .ant-card-body {
+	padding: 23px 23px 0 23px;
+	border-radius: 0 0 8px 8px;
+}
+:where(.css-dev-only-do-not-override-mzwlov).ant-btn {
+	height: unset !important;
+}
+:where(.css-dev-only-do-not-override-mzwlov).ant-modal .ant-modal-title {
+	text-align: center;
+}
+.ant-checkbox-checked .ant-checkbox-inner {
+	background-color: #800080; /* Purple color */
+	border-color: #800080; /* Purple color */
+	&:hover {
+		background-color: #800080; /* Purple color */
+		border-color: #800080;
+	}
+}
+
+.ant-checkbox-checked::after {
+	border-color: #800080; /* Purple color */
+}
+
+// .checkbox-group .ant-checkbox-wrapper {
+// 	display: block; /* Each checkbox on a new line */
+// 	margin-bottom: 8px; /* Optional: Add some spacing between checkboxes */
+// }
+.homepage_btn {
+	&:hover {
+		background: #581a57b4 !important;
+		color: #fff !important;
+	}
+}
+.playfair-display-normal {
+	font-family: "Playfair Display" !important;
+	font-optical-sizing: auto !important;
+	font-weight: 400 !important;
+	font-style: normal !important;
+}
+
+.playfair-display-bold {
+	font-family: "Playfair Display";
+	font-optical-sizing: auto !important;
+	font-weight: 700 !important;
+	font-style: normal !important;
+}
+.inter-bold {
+	font-family: "Inter", sans-serif;
+	font-optical-sizing: auto;
+	font-weight: 700;
+	font-style: normal;
+	font-variation-settings: "slnt" 0;
+}
+.inter-normal {
+	font-family: "Inter", sans-serif;
+	font-optical-sizing: auto;
+	font-weight: 400;
+	font-style: normal;
+	font-variation-settings: "slnt" 0;
+}
+
+button:disabled {
+	background: #ccc !important;
+	cursor: not-allowed !important;
+	color: #fff !important;
+	&:hover {
+		background: #ccc !important;
+	}
+}
+
+.customtable {
+	ul {
+		justify-content: center !important;
+	}
+}
+
+:where(.css-dev-only-do-not-override-mzwlov).ant-select-outlined:not(
+		.ant-select-customize-input
+	)
+	.ant-select-selector {
+	border: none !important;
+	outline: none !important;
+	border-color: transparent !important;
+	box-shadow: none !important;
+}
+
+:where(.css-dev-only-do-not-override-mzwlov).ant-drawer .ant-drawer-body {
+	padding: 0;
+}
+
+:where(.css-dev-only-do-not-override-mzwlov).ant-menu-inline .ant-menu-item {
+	margin-inline: 0;
+	padding-inline: 0;
+	width: 100%;
+	border-radius: unset !important;
+}
+
+@media (max-width: 990px) {
+	.customtable {
+		overflow-x: auto;
+		th {
+			font-size: 12px;
+		}
+	}
+	:where(.css-dev-only-do-not-override-mzwlov).ant-card-bordered {
+		background: transparent !important;
+	}
+}
+
+:where(.css-dev-only-do-not-override-mzwlov).ant-btn-default:not(:disabled):not(
+		.ant-btn-disabled
+	):hover {
+	border-color: unset;
+}
+
+.course_card {
+	width: 100%;
+	overflow: auto;
+	background: #fff !important;
+	.ant-card-body {
+		min-width: 1042px;
+		overflow-x: auto;
+	}
+}
+
+.hidden-scrollbar {
+	overflow: auto; /* Allows scrolling */
+}
+
+/* WebKit-based browsers */
+.hidden-scrollbar::-webkit-scrollbar {
+	display: none; /* Hides the scrollbar */
+}
+
+/* Firefox */
+.hidden-scrollbar {
+	scrollbar-width: none; /* Hides the scrollbar */
+}
+.ant-select-selector {
+	border: 0 !important;
+	outline: none !important;
+	background: transparent !important;
+	box-shadow: none !important;
+}
+.ant-select-focused:where(
+		.css-dev-only-do-not-override-d2lrxs
+	).ant-select-outlined:not(.ant-select-disabled):not(
+		.ant-select-customize-input
+	):not(.ant-pagination-size-changer)
+	.ant-select-selector {
+	border-color: unset !important;
+	box-shadow: none;
+}
+
+:where(.css-dev-only-do-not-override-1gwfwyx).ant-form-item
+	.ant-form-item-control-input {
+	align-items: left !important;
+}
+
+.tox-statusbar{
+	display: none !important;
+}
+
+.h_iframe iframe {
+	position:absolute;
+	top:0;
+	left:0;
+	width:100%;
+	height:100%;
+}
