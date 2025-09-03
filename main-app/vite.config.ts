@@ -1,3 +1,33 @@
+import { defineConfig, loadEnv } from "vite";
+import react from "@vitejs/plugin-react";
+
+// Export a function so we can load mode-specific env vars and configure the dev proxy
+export default ({ mode }: { mode: string }) => {
+    // Avoid referencing Node's `process` type to satisfy the linter when
+    // `@types/node` is not installed. loadEnv accepts a directory string;
+    // use current working directory via URL fallback.
+    const cwd = new URL(".", import.meta.url).pathname.replace(/\/$/, "");
+    const env = loadEnv(mode, cwd);
+    const apiTarget = (env.VITE_API_BASE as string) || "https://carlomagg675.pythonanywhere.com";
+
+    return defineConfig({
+        plugins: [react()],
+        server: {
+            proxy: {
+                // Proxy local /api requests to the remote backend in development
+                "/api": {
+                    target: apiTarget,
+                    changeOrigin: true,
+                    secure: false,
+                    rewrite: (path) => path.replace(/^\/api/, ""),
+                },
+            },
+        },
+    });
+};
+
+// http://127.0.0.1:5000
+// https://carlomagg675.pythonanywhere.com
 // import { defineConfig } from "vite";
 // import react from "@vitejs/plugin-react";
 
@@ -15,33 +45,4 @@
 // 	},
 // });
 
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 
-// https://vitejs.dev/config/
-export default defineConfig({
-	plugins: [react()],
-	server: {
-		proxy: {
-			"/api": {
-				target: "http://127.0.0.1:5000",
-				changeOrigin: true,
-				secure: false,
-				rewrite: (path) => path.replace(/^\/api/, ""),
-			},
-			"/uploads": {
-				target: "http://127.0.0.1:5000",
-				changeOrigin: true,
-				secure: false,
-			},
-			"/static": {
-				target: "http://127.0.0.1:5000",
-				changeOrigin: true,
-				secure: false,
-			},
-		},
-	},
-	build: {
-		outDir: "dist", // or any other directory you choose
-	},
-});

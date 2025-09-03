@@ -1,8 +1,10 @@
 import axios, { AxiosHeaders } from "axios";
 import { getStoredAuthToken, removeStoredAuthToken } from "../utils/storage";
 // import io from "socket.io-client";
-// Use a relative base path so it can be proxied in dev and mapped in prod
-export const baseurl = "/api";
+// Use a relative base path so it can be proxied in dev and mapped in prod.
+// For production builds you can set VITE_API_BASE in your environment and
+// the dev server will proxy /api to that target when running `npm run dev`.
+export const baseurl = (import.meta.env.VITE_API_BASE as string) || "/api";
 // export const socket = io(baseurl);
 const api = axios.create({
     baseURL: `${baseurl}`,
