@@ -3,30 +3,49 @@ import Layout from "../../Layout";
 import { Form, Input } from "antd";
 import { Button } from "../../../components";
 import { useNavigate } from "react-router-dom";
+import { URL } from "../../../utils/constants";
+import { ClientRequest } from "../../../requests";
 
 const Generate: React.FC<any> = () => {
-	const [loading, setLoading] = useState(false);
-	const nav = useNavigate();
+  const [loading, setLoading] = useState(false);
+  const nav = useNavigate();
 
-	const handleSubmit = (value: any) => {
-		if (value) setLoading(true);
-		console.log(value);
-		setTimeout(() => {
-			setLoading(false);
-			nav("/new/certificate", { state: value });
-		}, 2000);
-	};
+  const handleSubmit = async (value: any) => {
+    if (!value) return;
+    try {
+      setLoading(true);
+      const res: any = await ClientRequest.createCertificate({
+        course: value.course,
+        publication_title: value.publication_title,
+        publication_name: value.publication_name,
+        doi: value.doi,
+      });
+      const data = res?.data ?? res; // backend may wrap
+      const cert = data?.data ?? data; // support common envelope
+      const id = cert?.id ?? cert?.certificate?.id ?? cert?.result?.id;
+      if (id) {
+        nav(URL.CERTIFICATE_VIEW.replace(":id", String(id)));
+      } else {
+        // Fallback: stay and show minimal notice
+        console.warn("Certificate created but id missing in response", cert);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-	return (
-		<Layout>
-			<div className="w-[90%] sm:w-3/5 mx-auto">
-				<h2 className="text-[24px] sm:text-center my-[20px] font-semibold">
-					Generate Certificate
-				</h2>
-				<p className="text-[16px] sm:text-center mb-[20px]">
-					Publish your work from the learning development course and generate a
-					certificate of achievement.
-				</p>
+  return (
+    <Layout>
+      <div className="w-[90%] sm:w-3/5 mx-auto">
+        <h2 className="text-[24px] sm:text-center my-[20px] font-semibold">
+          Generate Certificate
+        </h2>
+        <p className="text-[16px] sm:text-center mb-[20px]">
+          Publish your work from the learning development course and generate a
+          certificate of achievement.
+        </p>
 
 				<Form
 					labelCol={{ span: 8 }}

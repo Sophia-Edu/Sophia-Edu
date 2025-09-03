@@ -34,6 +34,69 @@ export const SmileyIcon: React.FC<any> = () => {
 	);
 };
 
+export const OpenLockIcon: React.FC<{ className?: string; color?: string }> = ({ className, color }) => {
+    return (
+        <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            className={className}
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+        >
+            <path
+                d="M10.6667 6V4.66667C10.6667 3.19391 9.47275 2 8 2C6.52725 2 5.33333 3.19391 5.33333 4.66667"
+                stroke={color ?? "#27ae60"}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+            <path
+                d="M4 6H12C12.7364 6 13.3333 6.59695 13.3333 7.33333V12.6667C13.3333 13.403 12.7364 14 12 14H4C3.26362 14 2.66667 13.403 2.66667 12.6667V7.33333C2.66667 6.59695 3.26362 6 4 6Z"
+                stroke={color ?? "#27ae60"}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+            <path
+                d="M8 9.33333V10.6667"
+                stroke={color ?? "#27ae60"}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    );
+};
+
+export const LockIcon: React.FC<{ className?: string; color?: string }> = ({ className, color }) => {
+    return (
+        <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            className={className}
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+        >
+            <path
+                d="M4.66667 6V4.66667C4.66667 2.82572 6.15906 1.33333 8 1.33333C9.84095 1.33333 11.3333 2.82572 11.3333 4.66667V6M4 6H12C12.7364 6 13.3333 6.59695 13.3333 7.33333V12.6667C13.3333 13.403 12.7364 14 12 14H4C3.26362 14 2.66667 13.403 2.66667 12.6667V7.33333C2.66667 6.59695 3.26362 6 4 6Z"
+                stroke={color ?? "#581a5775"}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+            <path
+                d="M8 9.33333V10.6667"
+                stroke={color ?? "#581a5775"}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    );
+};
+
 export const SendArrow: React.FC<any> = ({ className, onclick }) => {
 	return (
 		<svg

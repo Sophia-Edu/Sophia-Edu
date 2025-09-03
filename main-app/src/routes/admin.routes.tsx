@@ -13,6 +13,7 @@ import {
  AdminSettingsPage,
  AdminStudentsPage,
  AdminTutorWalletPage,
+  AdminSubjectsIndustriesUploadPage,
 } from "../pages/ADMIN";
 
 const adminRoutes = [
@@ -79,6 +80,11 @@ const adminRoutes = [
         path: URL.ADMIN_CREATE_COURSE,
         element: <AdminCreateCoursePage />,
         name: 'Admin Create Course',
+    },
+    {
+        path: URL.ADMIN_SUBJECTS_INDUSTRIES,
+        element: <AdminSubjectsIndustriesUploadPage />,
+        name: 'Admin Subjects & Industries Upload',
     },
 ]
 

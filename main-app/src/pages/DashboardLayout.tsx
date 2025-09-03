@@ -89,6 +89,8 @@ const DashboardLayout: React.FC<{
 			pathname.includes("/admin/instructor")
 		) {
 			setActiveKey("3");
+		} else if (pathname === URL.ADMIN_SUBJECTS_INDUSTRIES) {
+			setActiveKey("7");
 		} else if (pathname === URL.TUTOR_WALLET || pathname === URL.ADMIN_WALLET) {
 			setActiveKey("4");
 		} else if (
@@ -137,6 +139,11 @@ const DashboardLayout: React.FC<{
 			} else {
 				navigate(URL.SETTINGS);
 			}
+		} else if (e.key === "7") {
+			if (isAdmin) {
+				navigate(URL.ADMIN_SUBJECTS_INDUSTRIES);
+			}
+			setActiveKey("7");
 		} else {
 			navigate(URL.ADMIN_SETTINGS);
 		}
@@ -228,6 +235,20 @@ const DashboardLayout: React.FC<{
 					>
 						{isAdmin ? "Instructors" : "Students"}
 					</Menu.Item>
+					{isAdmin ? (
+						<Menu.Item
+							key="7"
+							icon={
+								<SettingOutlined
+									color={activeKey == "7" ? "#581A57" : "#808080"}
+								/>
+							}
+							className={getMenuItemClass("7")}
+							onClick={() => navigate(URL.ADMIN_SUBJECTS_INDUSTRIES)}
+						>
+							Subjects & Industries
+						</Menu.Item>
+					) : null}
 					<Menu.Item
 						key="4"
 						icon={
@@ -348,6 +369,20 @@ const DashboardLayout: React.FC<{
 								>
 									{isAdmin ? "Instructors" : "Students"}
 								</Menu.Item>
+								{isAdmin ? (
+									<Menu.Item
+										key="7"
+										icon={
+											<SettingOutlined
+												color={activeKey == "7" ? "#581A57" : "#808080"}
+											/>
+										}
+										className={getMenuItemClass("7")}
+										onClick={() => navigate(URL.ADMIN_SUBJECTS_INDUSTRIES)}
+									>
+										Subjects & Industries
+									</Menu.Item>
+								) : null}
 								<Menu.Item
 									key="4"
 									icon={<Wallet2Icon />}

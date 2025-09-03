@@ -2,6 +2,7 @@ import { jwtDecode } from "jwt-decode";
 import axios from "axios";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
+import { Logo as defaultAvatar } from "../assets";
 
 // Define the interface for the JWT payload
 interface JwtPayload {
@@ -25,12 +26,17 @@ export const getRandomDate = () => {
 	}-${date.getDate()} ${date.getHours()}:${date.getMinutes()}pm`;
 };
 
-export const getAvatar = (avatar: string) => {
-	if (!!avatar) {
-		return avatar;
-	} else {
-		return "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQphO53vNmzmBvdevyFh99kVFK48BiPKMYV4w&s";
-	}
+export const getAvatar = (avatar?: string) => {
+    // Normalize and validate the incoming avatar value
+    const val = (avatar ?? "").trim();
+    if (!val || val.toLowerCase() === "undefined" || val.toLowerCase() === "null") {
+        return defaultAvatar as unknown as string;
+    }
+    // Replace known empty placeholder asset with Logo
+    if (/\/assets\/empty-post\.svg$/i.test(val) || /empty-post\.svg$/i.test(val)) {
+        return defaultAvatar as unknown as string;
+    }
+    return val;
 };
 
 export const clearAllCookies = () => {

@@ -520,8 +520,10 @@ const AboutPage: React.FC<any> = () => {
 						{/* Background Image with Transparency */}
 						<img
 							alt={course.course_name || "Course image"}
-							src={course.image 
-								? `${course.image.startsWith('http') ? course.image : `https://your-api-base-url/${course.image}`}` 
+							src={course.image
+								? (course.image.startsWith('http')
+									? course.image
+									: `/api/${String(course.image).replace(/^\//, '')}`)
 								: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
 							}
 							className="my-[30px] h-[165px] sm:h-[209px] w-full object-cover rounded-md"

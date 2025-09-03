@@ -39,14 +39,18 @@ const Layout: React.FC<any> = ({ children }) => {
 
 	useEffect(() => {
 		const fetchUser = async () => {
-			const res: any = await ClientRequest.getMe();
-			if (res) {
-				setUser(res);
+			try {
+				const res: any = await ClientRequest.getMe();
+				if (res) {
+					setUser(res);
+				} else {
+					console.warn("Profile fetch returned empty result");
+				}
+			} catch (e) {
+				console.error("Failed to fetch profile:", e);
 			}
 		};
-		if (!user) {
-			fetchUser();
-		}
+		fetchUser();
 	}, [setUser]);
 	const navigate = useNavigate();
 	const learningMenu: any = (

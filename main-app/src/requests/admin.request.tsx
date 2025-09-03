@@ -15,6 +15,123 @@ class AdminRequests {
 			throw new Error(errorMessage);
 		}
 	};
+
+	// Subjects and Industries Management
+	createSubject = async (data: any) => {
+		try {
+			const response = await api.post(`/subjects`, data);
+			return response;
+		} catch (error: any) {
+			console.log(error.response?.data);
+			const errorMessage =
+				error.response?.data?.error ||
+				error.response?.data?.message ||
+				"failed";
+			throw new Error(errorMessage);
+		}
+	};
+
+	bulkCreateSubjects = async (payload: any) => {
+		try {
+			// Accept a File/Blob directly or an object with a `file` property
+			const file: File | Blob | undefined =
+				payload instanceof Blob
+					? (payload as File | Blob)
+					: payload?.file;
+			if (!file) {
+				throw new Error("Bulk upload requires a file (.csv or .xlsx) under 'file'.");
+			}
+			const form = new FormData();
+			form.append("file", file as any);
+			const response = await api.post(`/subjects/upload`, form, {
+				headers: { "Content-Type": "multipart/form-data" },
+			});
+			return response;
+		} catch (error: any) {
+			console.log(error.response?.data);
+			const errorMessage =
+				error.response?.data?.error ||
+				error.response?.data?.message ||
+				"failed";
+			throw new Error(errorMessage);
+		}
+	};
+
+	uploadSubjectsFile = async (file: File | Blob) => {
+		try {
+			const form = new FormData();
+			form.append("file", file as any);
+			const response = await api.post(`/subjects/upload`, form, {
+				headers: { "Content-Type": "multipart/form-data" },
+			});
+			return response;
+		} catch (error: any) {
+			console.log(error.response?.data);
+			const errorMessage =
+				error.response?.data?.error ||
+				error.response?.data?.message ||
+				"failed";
+			throw new Error(errorMessage);
+		}
+	};
+
+	createIndustry = async (data: any) => {
+		try {
+			const response = await api.post(`/industries`, data);
+			return response;
+		} catch (error: any) {
+			console.log(error.response?.data);
+			const errorMessage =
+				error.response?.data?.error ||
+				error.response?.data?.message ||
+				"failed";
+			throw new Error(errorMessage);
+		}
+	};
+
+	bulkCreateIndustries = async (payload: any) => {
+		try {
+			// Accept a File/Blob directly or an object with a `file` property
+			const file: File | Blob | undefined =
+				payload instanceof Blob
+					? (payload as File | Blob)
+					: payload?.file;
+			if (!file) {
+				throw new Error("Bulk upload requires a file (.csv or .xlsx) under 'file'.");
+			}
+			const form = new FormData();
+			form.append("file", file as any);
+			const response = await api.post(`/industries/upload`, form, {
+				headers: { "Content-Type": "multipart/form-data" },
+			});
+			return response;
+		} catch (error: any) {
+			console.log(error.response?.data);
+			const errorMessage =
+				error.response?.data?.error ||
+				error.response?.data?.message ||
+				"failed";
+			throw new Error(errorMessage);
+		}
+	};
+
+	uploadIndustriesFile = async (file: File | Blob) => {
+		try {
+			const form = new FormData();
+			form.append("file", file as any);
+			const response = await api.post(`/industries/upload`, form, {
+				headers: { "Content-Type": "multipart/form-data" },
+			});
+			return response;
+		} catch (error: any) {
+			console.log(error.response?.data);
+			const errorMessage =
+				error.response?.data?.error ||
+				error.response?.data?.message ||
+				"failed";
+			throw new Error(errorMessage);
+		}
+	};
 	fetchAllAdmins = async () => {
 		try {
 			const response = await api.get(`/admin/admins`);

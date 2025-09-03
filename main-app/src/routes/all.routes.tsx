@@ -1,6 +1,7 @@
 import {
     LoginPage, RegisterPage,
     ForgotPasswordPage,
+    ResetPasswordPage,
 } from "../pages/STUDENT"
 import { TutorLoginPage } from "../pages/TUTOR";
 import { AdminLogin } from "../pages/ADMIN";
@@ -41,6 +42,11 @@ const allRoutes = [
         path: URL.FORGOT_PASSWORD,
         element: (<ForgotPasswordPage/>),
         name: 'Forgot Password',
+    },
+    {
+        path: URL.RESET_PASSWORD,
+        element: (<ResetPasswordPage/>),
+        name: 'Reset Password',
     },
     {
         path: "/admin",

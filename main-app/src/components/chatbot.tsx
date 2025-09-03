@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Send, X, MessageSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
+import clientRequests from '../requests/client.request';
+import { getAvatar } from '../utils/helperFunction';
 
 interface Message {
     content: string;
@@ -29,6 +31,20 @@ export function ChatBox({ isOpen, onClose }: ChatBoxProps) {
         },
     ]);
     const [input, setInput] = useState('');
+    const [me, setMe] = useState<any>(null);
+
+    useEffect(() => {
+        let mounted = true;
+        (async () => {
+            try {
+                const profile = await clientRequests.getMe();
+                if (mounted) setMe(profile || null);
+            } catch (e) {
+                // silent fail; fallback avatar will be used
+            }
+        })();
+        return () => { mounted = false; };
+    }, []);
 
     const handleSend = async (message: string = input) => {
         if (!message.trim()) return;
@@ -84,26 +100,44 @@ export function ChatBox({ isOpen, onClose }: ChatBoxProps) {
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {messages.map((message, index) => (
-                    <div
-                        key={index}
-                        className={cn(
-                            "flex",
-                            message.isUser ? "justify-end" : "justify-start"
-                        )}
-                    >
+                {messages.map((message, index) => {
+                    const userAvatar = getAvatar(me?.profile_image);
+                    const botAvatar = getAvatar("");
+                    return (
                         <div
+                            key={index}
                             className={cn(
-                                "max-w-[80%] rounded-lg p-3",
-                                message.isUser
-                                    ? "bg-blue-600 text-white rounded-br-none"
-                                    : "bg-gray-100 text-gray-900 rounded-bl-none"
+                                "flex items-end gap-2",
+                                message.isUser ? "justify-end" : "justify-start"
                             )}
                         >
-                            {message.content}
+                            {!message.isUser && (
+                                <img
+                                    src={botAvatar}
+                                    alt="AI avatar"
+                                    className="w-8 h-8 rounded-full object-cover"
+                                />
+                            )}
+                            <div
+                                className={cn(
+                                    "max-w-[80%] rounded-lg p-3",
+                                    message.isUser
+                                        ? "bg-blue-600 text-white rounded-br-none"
+                                        : "bg-gray-100 text-gray-900 rounded-bl-none"
+                                )}
+                            >
+                                {message.content}
+                            </div>
+                            {message.isUser && (
+                                <img
+                                    src={userAvatar}
+                                    alt="Your avatar"
+                                    className="w-8 h-8 rounded-full object-cover"
+                                />
+                            )}
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
 
                 {/* Show suggestions only when there's just the initial message */}
                 {messages.length === 1 && (

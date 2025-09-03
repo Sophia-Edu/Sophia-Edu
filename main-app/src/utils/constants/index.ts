@@ -8,6 +8,7 @@ export const URL = {
 	CONTACT: "/contact-us",
 	ABOUT: "/about-us",
 	FORGOT_PASSWORD: "/forgot-password",
+	RESET_PASSWORD: "/reset-password",
 	PRIVACY: "/privacy/terms-of-service",
 	COURSELISTING: "/course/all",
 	ABOUTCOURSE: "/course/",
@@ -15,11 +16,17 @@ export const URL = {
 	BLOG: "/blog",
 	PROFILE: "/profile/me/settings",
 	BIO: "/profile/me/bio",
+	USER_PROFILE: "/profile/:id",
 	WALLET: "/wallet",
 	GENERATE_CERTIFICATE: "/generate-certificate",
+	// New certificate routes
+	CERTIFICATE_VIEW: "/certificates/:id", // private view (owner/admin)
+	CERTIFICATE_PUBLIC: "/c/:slug", // public sharing/verification
 	NOTIFICATION: "/notifications",
 	UPLOAD: "/upload",
 	MESSAGING: "/messaging",
+	// Post detail (for shared links)
+	POST_DETAIL: "/posts/",
 
 	//Tutor URL
 	OVERVIEW: "/instructor/overview",
@@ -44,6 +51,7 @@ export const URL = {
 	ADMIN_CREATE_BLOGS: "/admin/create-blog",
 	ADMIN_CATEGORIES: "/admin/categories",
 	ADMIN_CREATE_CATEGORY: "/admin/categories/create",
+	ADMIN_SUBJECTS_INDUSTRIES: "/admin/subjects-industries",
 	ADMIN_LOGIN: "/admin/login",
 };
 
@@ -100,7 +108,17 @@ export const APPCONSTANTS = {
 		},
 		{
 			path: URL.GENERATE_CERTIFICATE,
-			name: "Certificatw",
+			name: "Certificate",
+			icon: UserOutlined,
+		},
+		{
+			path: URL.CERTIFICATE_VIEW,
+			name: "My Certificate",
+			icon: UserOutlined,
+		},
+		{
+			path: URL.CERTIFICATE_PUBLIC,
+			name: "Public Certificate",
 			icon: UserOutlined,
 		},
 		{

@@ -39,7 +39,7 @@ const CheckoutForm: React.FC<any> = ({ amount }) => {
 		}
 
 		// Optionally call your backend to create a payment intent
-		const response = await fetch("/create-payment-intent", {
+		const response = await fetch("/api/create-payment-intent", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

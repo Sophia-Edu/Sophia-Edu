@@ -6,13 +6,15 @@ export interface UserProps {
     full_name: string;
     email: string;
     password: string;
-    phone?: string;
+    phone_number?: string;
     profile_image?: string;
+    cover_photo?: string;
     location?: any;
     confirm_password: string;
     licenses_certifications?: any[];
     education?: any[];
     work_experience?: any[];
+    is_active?: boolean;
     age: number;
     gender: "male" | "female";
     bio?: string;

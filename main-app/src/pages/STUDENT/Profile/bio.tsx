@@ -5,12 +5,12 @@ import {
 	Avatar,
 	Button,
 	Form,
-	Select,
 	FormProps,
 	Input,
 	message,
-	Checkbox,
 	Switch,
+	Spin,
+	Select,
 } from "antd";
 import "./profile.styles.scss";
 
@@ -20,8 +20,12 @@ import { useAlert, UserProps, useUser } from "../../../store";
 import { ClientRequest } from "../../../requests";
 import { getAvatar } from "../../../utils/helperFunction";
 import axios from "axios";
+import api from "../../../Api";
+import { removeStoredAuthToken } from "../../../utils/storage";
+import authRequests from "../../../requests/auth.request";
+import { useParams } from "react-router-dom";
 
-const { Option } = Select;
+// Using AntD Select (multiple) for scalable follow selection
 
 dayjs.extend(customParseFormat);
 
@@ -34,7 +38,7 @@ const initialProfileValues: UserProps = {
 	gender: "male",
 	is_subscribed: false,
 	role: "student",
-	phone: "",
+	phone_number: "",
 	location: { country_region: null, city: null },
 	licenses_certifications: [{}],
 	education: [
@@ -62,23 +66,191 @@ const initialProfileValues: UserProps = {
 type EntityType = "education" | "licenses_certifications" | "work_experience";
 const Profile: React.FC<any> = () => {
 	const [form] = Form.useForm();
+	const previewFullName = Form.useWatch("full_name", form);
+	const previewBio = Form.useWatch("bio", form);
+	const previewLocation = Form.useWatch(["location"], form) as any;
+	const previewEducation = Form.useWatch(["education"], form) as any[] | undefined;
+	const previewWork = Form.useWatch(["work_experience"], form) as any[] | undefined;
+	const previewLicenses = Form.useWatch(["licenses_certifications"], form) as any[] | undefined;
+	const previewEmail = Form.useWatch("email", form);
+	const previewPhone = Form.useWatch("phone_number", form);
 	const { onFailure, onSuccess } = useAlert();
 	const { setUser, user } = useUser();
 	const [isLoading, setIsLoading] = useState(false);
+	const [isChangingPassword, setIsChangingPassword] = useState(false);
 	const [removing, setRemoving] = useState(0);
 	const [entities, setEntities] = useState<{ [key in EntityType]?: any[] }>({
 		education: initialProfileValues.education,
 		licenses_certifications: initialProfileValues.licenses_certifications,
 		work_experience: initialProfileValues.work_experience,
 	});
-	const [profile, setProfile] = useState<UserProps | null>(
-		initialProfileValues
-	);
+	const [profile, setProfile] = useState<UserProps | null>(initialProfileValues);
 	const fileInputRef: any = useRef(null);
-	const [checkedValues, setCheckedValues] = useState<any[]>([]);
+	const coverFileInputRef: any = useRef(null);
+  // Follow Subjects/Industries state and loading
+  const [subjects, setSubjects] = useState<any[]>([]);
+  const [industries, setIndustries] = useState<any[]>([]);
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
+  const [loadingIndustries, setLoadingIndustries] = useState(false);
+  const [submittingFollow, setSubmittingFollow] = useState(false);
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>([]);
+  const [selectedIndustryIds, setSelectedIndustryIds] = useState<number[]>([]);
+  // metadata maps keyed by id for quick lookup (keeps visible label unchanged)
+  const [subjectMetaMap, setSubjectMetaMap] = useState<Record<number, any>>({});
+  const [industryMetaMap, setIndustryMetaMap] = useState<Record<number, any>>({});
 
-	const onChange = (checkedValue: any) => {
-		setCheckedValues(checkedValue);
+	// Routing: detect if viewing another user's profile
+	const { id: routeId } = useParams();
+	const viewingOther = !!routeId && String((user as any)?.id ?? "") !== String(routeId);
+	const [otherProfile, setOtherProfile] = useState<UserProps | null>(null);
+	const displayUser = viewingOther ? otherProfile : user;
+
+	useEffect(() => {
+		let active = true;
+		(async () => {
+			if (viewingOther && routeId) {
+				try {
+					const res: any = await ClientRequest.getUserById(Number(routeId));
+					if (active) setOtherProfile(res);
+				} catch (e) {
+					// silent
+				}
+			}
+		})();
+		return () => {
+			active = false;
+		};
+	}, [routeId, viewingOther]);
+
+	// Sync form with other profile when viewingOther
+	useEffect(() => {
+		if (viewingOther && otherProfile) {
+			form.setFieldsValue(otherProfile as any);
+			setProfile(otherProfile);
+		}
+	}, [viewingOther, otherProfile, form]);
+
+  // Hydrate selected follows from localStorage (temporary until backend provides fetch follows)
+  useEffect(() => {
+    try {
+      const savedSubjects = localStorage.getItem("followed_subject_ids");
+      const savedIndustries = localStorage.getItem("followed_industry_ids");
+      if (savedSubjects) setSelectedSubjectIds(JSON.parse(savedSubjects));
+      if (savedIndustries) setSelectedIndustryIds(JSON.parse(savedIndustries));
+    } catch {}
+  }, []);
+
+  // Load lists for follow options (store full objects in maps for guidance display)
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        setLoadingSubjects(true);
+        const res = (await api.get("/subjects_for_follow")) as any;
+        if (active) {
+          const list = Array.isArray(res) ? res : [];
+          setSubjects(list);
+          const map: Record<number, any> = {};
+          list.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
+          setSubjectMetaMap(map);
+        }
+      } catch (err: any) {
+        console.error("Failed to load subjects", err);
+        message.error(err?.response?.data?.error || "Failed to load subjects");
+      } finally {
+        setLoadingSubjects(false);
+      }
+      try {
+        setLoadingIndustries(true);
+        const res = (await api.get("/industries_for_follow")) as any;
+        if (active) {
+          const list = Array.isArray(res) ? res : [];
+          setIndustries(list);
+          const map: Record<number, any> = {};
+          list.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
+          setIndustryMetaMap(map);
+        }
+      } catch (err: any) {
+        console.error("Failed to load industries", err);
+        message.error(err?.response?.data?.error || "Failed to load industries");
+      } finally {
+        setLoadingIndustries(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const onSubjectsFollowChange = async (newIds: number[]) => {
+    const prev = new Set(selectedSubjectIds);
+    const next = new Set(newIds);
+    const toFollow = Array.from(next).filter((id) => !prev.has(id));
+    const toUnfollow = Array.from(prev).filter((id) => !next.has(id));
+    setSelectedSubjectIds(newIds);
+    try { localStorage.setItem("followed_subject_ids", JSON.stringify(newIds)); } catch {}
+    if (toFollow.length === 0 && toUnfollow.length === 0) return;
+    setSubmittingFollow(true);
+    const key = "bio-follow-subjects";
+    message.loading({ content: "Updating subjects...", key });
+    try {
+      await Promise.all([
+        ...toFollow.map((id) => api.post(`/subjects/${id}/follow`)),
+        ...toUnfollow.map((id) => api.post(`/subjects/${id}/unfollow`)),
+      ]);
+      message.success({ content: "Subjects updated", key, duration: 1.5 });
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.response?.data?.error || "Failed to update subjects";
+      console.error("Subjects update failed", err);
+      message.error({ content: msg, key });
+    } finally {
+      setSubmittingFollow(false);
+    }
+  };
+
+  const onIndustriesFollowChange = async (newIds: number[]) => {
+    const prev = new Set(selectedIndustryIds);
+    const next = new Set(newIds);
+    const toFollow = Array.from(next).filter((id) => !prev.has(id));
+    const toUnfollow = Array.from(prev).filter((id) => !next.has(id));
+    setSelectedIndustryIds(newIds);
+    try { localStorage.setItem("followed_industry_ids", JSON.stringify(newIds)); } catch {}
+    if (toFollow.length === 0 && toUnfollow.length === 0) return;
+    setSubmittingFollow(true);
+    const key = "bio-follow-industries";
+    message.loading({ content: "Updating industries...", key });
+    try {
+      await Promise.all([
+        ...toFollow.map((id) => api.post(`/industries/${id}/follow`)),
+        ...toUnfollow.map((id) => api.post(`/industries/${id}/unfollow`)),
+      ]);
+      message.success({ content: "Industries updated", key, duration: 1.5 });
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.response?.data?.error || "Failed to update industries";
+      console.error("Industries update failed", err);
+      message.error({ content: msg, key });
+    } finally {
+      setSubmittingFollow(false);
+    }
+  };
+
+	const handleActiveToggle = async (checked: boolean) => {
+		try {
+			await ClientRequest.setActive(checked);
+			onSuccess(checked ? "Account activated" : "Account deactivated");
+			if (checked) {
+				// On activation, refresh user profile state
+				const res: any = await ClientRequest.getMe();
+				setUser(res);
+			} else {
+				// On deactivation, immediately reflect locally and logout
+				if (user) {
+					setUser({ ...user, is_active: false } as any);
+				}
+				removeStoredAuthToken();
+				window.location.assign("/login?reactivate=1");
+			}
+		} catch (error: any) {
+			onFailure(error);
+		}
 	};
 	const [activeTab, setActiveTab] = useState("1");
 
@@ -117,6 +289,36 @@ const Profile: React.FC<any> = () => {
 		} catch (error) {
 			console.error("Error fetching location data:", error);
 			return { country: "Unknown", city: "Unknown" };
+		}
+	};
+
+	const handlePhoneBlur = async () => {
+		try {
+			const value = form.getFieldValue("phone_number");
+			await ClientRequest.updateMe({ phone_number: value });
+			onSuccess("Phone number updated!");
+			const res: any = await ClientRequest.getMe();
+			setUser(res);
+		} catch (error: any) {
+			onFailure(error);
+		}
+	};
+
+	const handleCoverFileChange = async (
+		event: React.ChangeEvent<HTMLInputElement>
+	) => {
+		const file = event.target.files?.[0];
+		if (file) {
+			setCoverUrl(URL.createObjectURL(file));
+			try {
+				await ClientRequest.uploadCoverPhoto(file);
+				onSuccess("Cover photo updated successfully!");
+				// Refetch to sync store so banner updates across app
+				const res: any = await ClientRequest.getMe();
+				setUser(res);
+			} catch (error: any) {
+				onFailure(error);
+			}
 		}
 	};
 	const handleClick = () => {
@@ -199,6 +401,7 @@ const Profile: React.FC<any> = () => {
 		}
 	}, [user, form]);
 	const [imageUrl, setImageUrl] = useState<string | undefined>(undefined);
+	const [coverUrl, setCoverUrl] = useState<string | undefined>(undefined);
 
 	const handleFileChange = async (
 		event: React.ChangeEvent<HTMLInputElement>
@@ -207,10 +410,6 @@ const Profile: React.FC<any> = () => {
 		if (file) {
 			// Display the image preview
 			setImageUrl(URL.createObjectURL(file));
-
-			// Prepare the form data for the file upload
-			const formData = new FormData();
-			formData.append("file", file);
 
 			try {
 				// Upload the file to the server
@@ -278,7 +477,7 @@ const Profile: React.FC<any> = () => {
 				: {
 						id: entities.work_experience && entities.work_experience.length + 1,
 						company: "",
-						role: "",
+						role_title: "",
 						job_description: "",
 						start_date: "",
 						end_date: "",
@@ -289,51 +488,93 @@ const Profile: React.FC<any> = () => {
 		}));
 	};
 
-	// const saveEntity = async (
-	// 	index: string,
-	// 	entity: "education" | "licenses_certifications" | "work_experience",
-	// 	data: any
-	// ) => {
-	// 	try {
-	// 		setAdding(parseInt(index) + 1);
-	// 		await ClientRequest.addProfileEntity(index, entity, data);
-	// 	} catch (error) {
-	// 	} finally {
-	// 		setAdding(0);
-	// 	}
-	// };
-
-	const removeEntity = async (index: number, entity: EntityType) => {
-		setRemoving(index + 1);
-		setEntities((prevState: any) => ({
-			...prevState,
-			[entity]: [],
-		}));
+	const removeEntity = async (id: number, entity: EntityType) => {
+		setRemoving(id);
+		const currentList: any[] = form.getFieldValue(entity) || [];
+		const persistedIds = Array.isArray(user?.[entity])
+			? (user as any)[entity].map((x: any) => x?.id).filter((v: any) => v != null)
+			: [];
+		const isPersisted = persistedIds.includes(id);
 		try {
-			await ClientRequest.deleteProfileEntity(index.toString(), entity);
-			console.log(entities);
+			if (isPersisted) {
+				await ClientRequest.deleteProfileEntity(id.toString(), entity);
+			}
 		} catch (error) {
 			console.log(error);
 		} finally {
-			console.log(form.getFieldValue(entity), index);
-			form.getFieldValue(entity).filter((val: any) => val.id != index);
+			const next = currentList.filter((val: any) => val.id !== id);
+			form.setFieldsValue({ [entity]: next } as any);
 			setEntities((prevState: any) => ({
 				...prevState,
-				[entity]: form
-					.getFieldValue(entity)
-					.filter((val: any) => val.id != index),
+				[entity]: next,
 			}));
 			setRemoving(0);
 		}
 	};
 
+	// Build minimal payload for partial updates (omit empty and untouched rows)
+	const buildPartialPayload = () => {
+		const values = form.getFieldsValue(true) as any;
+		const payload: any = {};
+		const keepString = (v: any) => v !== undefined && v !== null && String(v).trim() !== "";
+		// Top-level fields
+		["full_name", "email", "bio", "phone_number", "profile_image", "cover_photo"].forEach((k) => {
+			if (keepString(values[k])) payload[k] = values[k];
+		});
+		// Location
+		if (values.location) {
+			const loc: any = {};
+			if (keepString(values.location.country_region)) loc.country_region = values.location.country_region;
+			if (keepString(values.location.city)) loc.city = values.location.city;
+			if (Object.keys(loc).length) payload.location = loc;
+		}
+		// Helper for arrays
+		const mapArray = (arr: any[], keys: string[]) =>
+			(arr || [])
+				.map((item: any) => {
+					if (!item) return null;
+					const out: any = {};
+					if (item.id != null) out.id = item.id;
+					keys.forEach((k) => {
+						if (keepString(item[k])) out[k] = item[k];
+					});
+					return Object.keys(out).length ? out : null;
+				})
+				.filter(Boolean);
+		const edu = mapArray(values.education, ["school", "degree", "field_of_study", "start_date", "end_date"]);
+		if (edu.length) payload.education = edu;
+		const work = mapArray(values.work_experience, ["company", "role_title", "job_description", "start_date", "end_date"]);
+		if (work.length) payload.work_experience = work;
+		const lic = mapArray(values.licenses_certifications, ["name", "issuing_organization", "issue_date", "expiration_date", "credential_id", "credential_url"]);
+		if (lic.length) payload.licenses_certifications = lic;
+		return payload;
+	};
+
+	const handlePartialUpdate = async () => {
+		try {
+			setIsLoading(true);
+			const payload = buildPartialPayload();
+			if (!Object.keys(payload).length) {
+				return onFailure("Nothing to update");
+			}
+			const resp: any = await ClientRequest.partialUpdate(payload);
+			onSuccess(resp?.message || "Profile partially updated successfully");
+			const res: any = await ClientRequest.getMe();
+			setUser(res);
+		} catch (error: any) {
+			onFailure(error.message || "Failed partial update");
+		} finally {
+			setIsLoading(false);
+		}
+	};
+
 	return (
-		<Layout loading={!user}>
+		<Layout loading={!displayUser}>
 			<div className="w-[90%] md-920:w-4/5 mx-auto profile">
 				<div className="relative">
 					<img
-						alt="example"
-						src={profileBG} // Changed to use image prop
+						alt="cover"
+						src={coverUrl || ((displayUser?.cover_photo as string) || profileBG)}
 						className="h-[120px] sm:h-[200px] w-full object-cover rounded-md"
 					/>
 					<div className="flex justify-between sm:flex-row flex-col">
@@ -341,27 +582,57 @@ const Profile: React.FC<any> = () => {
 							<Avatar
 								size={64}
 								className="cursor-pointer border-4 border-solid border-white "
-								src={imageUrl || getAvatar(user?.profile_image as string)} // Changed to use avatar prop
+								src={imageUrl || getAvatar(displayUser?.profile_image as string)} // Changed to use avatar prop
 								alt="Profile Image" // Changed to use avatar prop
-								onClick={() => fileInputRef.current?.click()}
+								onClick={() => { if (!viewingOther) fileInputRef.current?.click(); }}
 							/>
+							{!viewingOther && (
 							<input
 								type="file"
 								ref={fileInputRef}
 								style={{ display: "none" }}
 								onChange={handleFileChange}
 							/>
+							)}
+							{!viewingOther && (
+							<input
+								type="file"
+								ref={coverFileInputRef}
+								style={{ display: "none" }}
+								onChange={handleCoverFileChange}
+							/>
+							)}
 							<div className=" flex flex-col gap-y-1">
 								<h2 className="text-[16px] font-medium mt-[18px]">
-									{profile?.full_name}
+									{previewFullName ?? displayUser?.full_name}
 								</h2>
 								<p className="text-[#808080] flex gap-2 items-center text-[14px] ">
 									<AddressLocator />
-									Location
+									{(() => {
+										const loc = previewLocation ?? displayUser?.location;
+										const country = loc?.country_region;
+										const city = loc?.city;
+										return (country || city)
+											? `${country || ""}${city ? `, ${city}` : ""}`
+											: "Location";
+									})()}
 								</p>
-								<p className="text-[#808080] cursor-pointer text-[14px]">
-									Change Profile Picture
-								</p>
+								{!viewingOther && (
+									<p
+										className="text-[#808080] cursor-pointer text-[14px]"
+										onClick={() => fileInputRef.current?.click()}
+									>
+										Change Profile Picture
+									</p>
+								)}
+								{!viewingOther && (
+									<p
+										className="text-[#808080] cursor-pointer text-[14px]"
+										onClick={() => coverFileInputRef.current?.click()}
+									>
+										Change Cover Photo
+									</p>
+								)}
 							</div>
 						</div>
 
@@ -400,7 +671,20 @@ const Profile: React.FC<any> = () => {
 										Personal Information
 									</h3>
 									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
-										Input your username and bio here
+										{(() => {
+											const nameOrEmail = previewFullName || previewEmail || user?.full_name || user?.email;
+											const bio = previewBio ?? user?.bio;
+											const phone = previewPhone ?? user?.phone_number;
+											return nameOrEmail ? (
+												<>
+													<span>{nameOrEmail}</span>
+													{bio && (<span className="block">{bio}</span>)}
+													{phone && (<span className="block">{phone}</span>)}
+												</>
+											) : (
+												"Input your username, bio and phone number here"
+											);
+										})()}
 									</p>
 								</div>
 							</div>
@@ -415,6 +699,13 @@ const Profile: React.FC<any> = () => {
 								<Form.Item label="Bio" className="inter-normal" name="bio">
 									<Input.TextArea placeholder="I am a..." className="p-2" />
 								</Form.Item>
+								<Form.Item
+									label="Phone Number"
+									className="inter-normal"
+									name="phone_number"
+								>
+									<Input placeholder="+44123456" className="p-2" onBlur={handlePhoneBlur} />
+								</Form.Item>
 							</div>
 						</div>
 
@@ -426,7 +717,14 @@ const Profile: React.FC<any> = () => {
 										Location
 									</h3>
 									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
-										Input your location here
+										{(() => {
+											const loc = previewLocation ?? user?.location;
+											const country = loc?.country_region;
+											const city = loc?.city;
+											return (country || city)
+												? `${country || ""}${city ? `, ${city}` : ""}`
+												: "Input your location here";
+										})()}
 									</p>
 								</div>
 							</div>
@@ -465,9 +763,35 @@ const Profile: React.FC<any> = () => {
 									<h3 className="mb-[10px] text-[24px] font-semibold">
 										Education
 									</h3>
-									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
-										Input your educational background here
-									</p>
+									<div className="text-[#666666] text-[16px] w-full lg:w-[72%]">
+										{(() => {
+											const source = (previewEducation && previewEducation.length ? previewEducation : user?.education) as any[] | undefined;
+											const items = (source || []).filter((e: any) => (e?.school && String(e.school).trim()) || (e?.degree && String(e.degree).trim()));
+											if (!items.length) return "Input your educational background here";
+											return (
+												<div className="flex flex-col gap-3">
+													{items.map((e: any, idx: number) => {
+														const school = (e.school != null ? String(e.school) : "").trim();
+														const degree = (e.degree != null ? String(e.degree) : "").trim();
+														const field = (e.field_of_study != null ? String(e.field_of_study) : "").trim();
+														const sd = (e.start_date != null ? String(e.start_date) : "").trim();
+														const ed = (e.end_date != null ? String(e.end_date) : "").trim();
+														return (
+															<div key={idx} className="leading-snug">
+																{school && <div>{school}</div>}
+																{degree && <div className="text-[#808080]">{degree}</div>}
+																{field && <div className="text-[#808080]">{field}</div>}
+																{(sd || ed) && (
+																	<div className="text-[#9A9A9A] text-[14px]">{sd || "—"} - {ed || "Present"}</div>
+																)}
+																{!school && !degree && !field && !sd && !ed && <div>—</div>}
+															</div>
+														);
+													})}
+												</div>
+											);
+										})()}
+									</div>
 								</div>
 							</div>
 
@@ -536,8 +860,8 @@ const Profile: React.FC<any> = () => {
 											{index > 0 && (
 												<Button
 													htmlType="button"
-													loading={removing === data.id + 1}
-													disabled={removing === data.id + 1}
+													loading={removing === data.id}
+													disabled={removing === data.id}
 													onClick={() => removeEntity(data.id, "education")}
 													className="bg-[#DBDBDB] !hover:bg-[#DBDBDB] text-[#3A3A3A] text-[14px] rounded-[8px]"
 												>
@@ -563,9 +887,35 @@ const Profile: React.FC<any> = () => {
 									<h3 className="mb-[10px] text-[24px] font-semibold">
 										Work Experience
 									</h3>
-									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
-										Input your work experience(s) here
-									</p>
+									<div className="text-[#666666] text-[16px] w-full lg:w-[72%]">
+										{(() => {
+											const source = (previewWork && previewWork.length ? previewWork : user?.work_experience) as any[] | undefined;
+											const items = (source || []).filter((w: any) => (w?.company && String(w.company).trim()) || (w?.role_title && String(w.role_title).trim()));
+											if (!items.length) return "Input your work experience(s) here";
+											return (
+												<div className="flex flex-col gap-3">
+													{items.map((w: any, idx: number) => {
+														const company = (w.company != null ? String(w.company) : "").trim();
+														const role = (w.role_title != null ? String(w.role_title) : "").trim();
+														const desc = (w.job_description != null ? String(w.job_description) : "").trim();
+														const sd = (w.start_date != null ? String(w.start_date) : "").trim();
+														const ed = (w.end_date != null ? String(w.end_date) : "").trim();
+														return (
+															<div key={idx} className="leading-snug">
+																{company && <div>{company}</div>}
+																{role && <div className="text-[#808080]">{role}</div>}
+																{desc && <div className="text-[#808080]">{desc}</div>}
+																{(sd || ed) && (
+																	<div className="text-[#9A9A9A] text-[14px]">{sd || "—"} - {ed || "Present"}</div>
+																)}
+																{!company && !role && !desc && !sd && !ed && <div>—</div>}
+															</div>
+														);
+													})}
+												</div>
+											);
+										})()}
+									</div>
 								</div>
 							</div>
 							<div className="w-full md-920:w-1/2">
@@ -622,8 +972,8 @@ const Profile: React.FC<any> = () => {
 											{index > 0 && (
 												<Button
 													htmlType="button"
-													loading={removing === data.id + 1}
-													disabled={removing === data.id + 1}
+													loading={removing === data.id}
+													disabled={removing === data.id}
 													onClick={() =>
 														removeEntity(data.id, "work_experience")
 													}
@@ -652,9 +1002,37 @@ const Profile: React.FC<any> = () => {
 									<h3 className="mb-[10px] text-[24px] font-semibold">
 										Licenses and Certifications
 									</h3>
-									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
-										This is the area to showcase what you have got
-									</p>
+									<div className="text-[#666666] text-[16px] w-full lg:w-[72%]">
+										{(() => {
+											const source = (previewLicenses && previewLicenses.length ? previewLicenses : user?.licenses_certifications) as any[] | undefined;
+											const items = (source || []).filter((l: any) => (l?.name && String(l.name).trim()) || (l?.issuing_organization && String(l.issuing_organization).trim()) || (l?.credential_url && String(l.credential_url).trim()));
+											if (!items.length) return "This is the area to showcase what you have got";
+											return (
+												<div className="flex flex-col gap-3">
+													{items.map((l: any, idx: number) => {
+														const name = (l.name != null ? String(l.name) : "").trim();
+														const org = (l.issuing_organization != null ? String(l.issuing_organization) : "").trim();
+														const credId = (l.credential_id != null ? String(l.credential_id) : "").trim();
+														const url = (l.credential_url != null ? String(l.credential_url) : "").trim();
+														const issue = (l.issue_date != null ? String(l.issue_date) : "").trim();
+														const exp = (l.expiration_date != null ? String(l.expiration_date) : "").trim();
+														return (
+															<div key={idx} className="leading-snug">
+																{name && <div>{name}</div>}
+																{org && <div className="text-[#808080]">{org}</div>}
+																{credId && <div className="text-[#808080]">{credId}</div>}
+																{(issue || exp) && (
+																	<div className="text-[#9A9A9A] text-[14px]">{issue || "—"} - {exp || "—"}</div>
+																)}
+																{url && <div className="text-[#808080] break-all">{url}</div>}
+																{!name && !org && !credId && !issue && !exp && !url && <div>—</div>}
+															</div>
+														);
+													})}
+												</div>
+											);
+										})()}
+									</div>
 								</div>
 							</div>
 							<div className="w-full md-920:w-1/2">
@@ -715,7 +1093,7 @@ const Profile: React.FC<any> = () => {
 												name={[
 													"licenses_certifications",
 													index,
-													"credentials_id",
+													"credential_id",
 												]}
 											>
 												<Input placeholder="#2CDMW34C" className="p-2" />
@@ -738,8 +1116,8 @@ const Profile: React.FC<any> = () => {
 												{index > 0 && (
 													<Button
 														htmlType="button"
-														loading={removing === data.id + 1}
-														disabled={removing === data.id + 1}
+														loading={removing === data.id}
+														disabled={removing === data.id}
 														onClick={() =>
 															removeEntity(data.id, "licenses_certifications")
 														}
@@ -767,15 +1145,31 @@ const Profile: React.FC<any> = () => {
 								style={{ visibility: "hidden" }}
 							></div>
 							<div className="w-full md-920:w-1/2">
-								<Button
-									htmlType="submit"
-									block
-									loading={isLoading}
-									disabled={isLoading}
-									className="my-[15px] p-[20px] text-white bg-[#581A57]"
-								>
-									Update
-								</Button>
+								{!viewingOther && (
+									<div className="my-[15px] flex gap-3">
+										<Button
+											htmlType="submit"
+											loading={isLoading}
+											disabled={isLoading}
+											className="p-[20px] text-white bg-[#581A57]"
+										>
+											Update
+										</Button>
+										<Button
+											type="default"
+											htmlType="button"
+											loading={isLoading}
+											disabled={isLoading}
+											className="p-[20px]"
+											onClick={(e) => { e.preventDefault(); handlePartialUpdate(); }}
+										>
+											Partial update
+										</Button>
+										<p className="text-[12px] text-[#666666] leading-snug mt-1">
+											Partial update saves only what you changed and leaves the rest of your profile as-is. For lists (Education, Work, Licenses), it updates existing entries and adds new ones when needed.
+										</p>
+									</div>
+								)}
 							</div>
 						</div>
 					</Form>
@@ -794,7 +1188,18 @@ const Profile: React.FC<any> = () => {
 										Contact Details
 									</h3>
 									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
-										Input your contact details
+										{(() => {
+											const email = previewEmail ?? user?.email;
+											const phone = previewPhone ?? user?.phone_number;
+											return (email || phone) ? (
+												<>
+													<span>{email || ""}</span>
+													{phone && (<span className="block">{phone}</span>)}
+												</>
+											) : (
+												"Input your contact details"
+											);
+										})()}
 									</p>
 								</div>
 							</div>
@@ -815,7 +1220,7 @@ const Profile: React.FC<any> = () => {
 									className="inter-normal"
 									name="phone_number"
 								>
-									<Input placeholder="+44123456" className="p-2" />
+									<Input placeholder="+44123456" className="p-2" onBlur={handlePhoneBlur} />
 								</Form.Item>
 							</div>
 						</div>
@@ -825,7 +1230,7 @@ const Profile: React.FC<any> = () => {
 							<div className="w-full sm:w-1/2">
 								<div>
 									<h3 className="mb-[10px] text-[24px] font-semibold">
-										Follow subjects
+										Follow subjects and industries
 									</h3>
 									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
 										Let our recommendation system suggest your preferred project
@@ -834,58 +1239,109 @@ const Profile: React.FC<any> = () => {
 								</div>
 							</div>
 							<div className="w-full sm:w-1/2">
-								<Form.Item
-									name="mySelect"
-									label="Select Options"
-									// rules={[
-									// 	{ required: true, message: "Please select your options!" },
-									// ]}
-								>
-									<Select
-										mode="multiple"
-										placeholder="Search subjects"
-										value={checkedValues}
-										onChange={onChange}
-										className="p-2 bg-white rounded-md"
-										dropdownRender={(menu) => (
-											<>
-												{menu}
-												<div className="flex flex-col cursor-pointer p-[8px] gap-2">
-													{["chemistry", "french", "english"].map((option) => (
-														<Checkbox
-															key={option}
-															value={option}
-															checked={checkedValues.includes(option)}
-															onChange={() => {
-																if (checkedValues.includes(option)) {
-																	setCheckedValues(
-																		checkedValues.filter(
-																			(item) => item !== option
-																		)
-																	);
-																} else {
-																	setCheckedValues([...checkedValues, option]);
-																}
-															}}
-														>
-															{option.replace("option", "Option ")}
-														</Checkbox>
+								<Form.Item label="Subjects" className="inter-normal">
+									<Spin spinning={loadingSubjects || submittingFollow}>
+										<Select
+											mode="multiple"
+											allowClear
+											showSearch
+											placeholder="Search Subject"
+											className="w-full"
+											value={selectedSubjectIds}
+											onChange={(vals) => onSubjectsFollowChange(vals as number[])}
+											optionLabelProp="title"
+											optionFilterProp="title"
+											notFoundContent="No subjects available"
+										>
+											{subjects.map((s: any) => (
+												<Select.Option key={s.id} value={s.id} title={s.name}>
+													<div>
+														<div>{s.name}</div>
+														{/* show additional metadata inside dropdown only (not in selected label) */}
+														{Object.keys(s).filter((k) => k !== "id" && k !== "name").length > 0 && (
+															<div className="text-[#666666] text-sm mt-1">
+																{Object.keys(s)
+																	.filter((k) => k !== "id" && k !== "name")
+																	.map((k) => (
+																		<div key={k}><strong>{k}:</strong> {String((s as any)[k])}</div>
+																	))}
+															</div>
+														)}
+													</div>
+												</Select.Option>
+											))}
+										</Select>
+									</Spin>
+									{/* Guidance: show metadata for the most recently selected subject (visible label stays as name) */}
+									{selectedSubjectIds && selectedSubjectIds.length > 0 && (() => {
+										const lastId = selectedSubjectIds[selectedSubjectIds.length - 1];
+										const meta = subjectMetaMap[lastId];
+										if (!meta) return null;
+										const extra: Record<string, any> = { ...meta };
+										delete extra.id;
+										delete extra.name;
+										const keys = Object.keys(extra);
+										if (!keys.length) return null;
+										return (
+											<div className="text-sm text-[#666666] mt-2" aria-live="polite">
+												{keys.map((k) => (
+													<div key={k}><strong>{k}:</strong> {String((extra as any)[k])}</div>
+												))}
+											</div>
+										);
+									})()}
+								</Form.Item>
+
+								<Form.Item label="Industry" className="inter-normal">
+									<Spin spinning={loadingIndustries || submittingFollow}>
+										<Select
+											mode="multiple"
+											allowClear
+											showSearch
+											placeholder="Select Industry"
+											className="w-full"
+											value={selectedIndustryIds}
+											onChange={(vals) => onIndustriesFollowChange(vals as number[])}
+											optionLabelProp="title"
+											optionFilterProp="title"
+											notFoundContent="No industries available"
+										>
+											{industries.map((i: any) => (
+												<Select.Option key={i.id} value={i.id} title={i.name}>
+													<div>
+														<div>{i.name}</div>
+														{Object.keys(i).filter((k) => k !== "id" && k !== "name").length > 0 && (
+											<div className="text-[#666666] text-sm mt-1">
+												{Object.keys(i)
+													.filter((k) => k !== "id" && k !== "name")
+													.map((k) => (
+														<div key={k}><strong>{k}:</strong> {String((i as any)[k])}</div>
 													))}
-												</div>
-											</>
+											</div>
 										)}
-										optionLabelProp="label"
-									>
-										<Option value="chemistry" label="Chemistry">
-											Chemistry
-										</Option>
-										<Option value="french" label="French">
-											French
-										</Option>
-										<Option value="english" label="english">
-											English
-										</Option>
-									</Select>
+									</div>
+								</Select.Option>
+							))}
+						</Select>
+					</Spin>
+									{/* Guidance: show metadata for the most recently selected industry */}
+									{selectedIndustryIds && selectedIndustryIds.length > 0 && (() => {
+										const lastId = selectedIndustryIds[selectedIndustryIds.length - 1];
+										const meta = industryMetaMap[lastId];
+										if (!meta) return null;
+										const extra: Record<string, any> = { ...meta };
+										delete extra.id;
+										delete extra.name;
+										const keys = Object.keys(extra);
+										if (!keys.length) return null;
+										return (
+											<div className="text-sm text-[#666666] mt-2" aria-live="polite">
+												{keys.map((k) => (
+													<div key={k}><strong>{k}:</strong> {String((extra as any)[k])}</div>
+												))}
+											</div>
+										);
+									})()}
 								</Form.Item>
 							</div>
 						</div>
@@ -903,21 +1359,20 @@ const Profile: React.FC<any> = () => {
 								</div>
 							</div>
 							<div className="w-full sm:w-1/2">
-								<Form.Item
-									name="deactivateAccount"
-									valuePropName="checked" // Maps the checked state to the form value
-								>
-									<Switch defaultChecked={false} className="custom-switch" />
-								</Form.Item>
+								<Switch
+									checked={user?.is_active ?? true}
+									onChange={handleActiveToggle}
+									className="custom-switch"
+								/>
 							</div>
 						</div>
 
-						{/* Password INfo */}
+						{/* Password Info */}
 						<div className="flex flex-col sm:flex-row gap-2 my-[28px]">
 							<div className="w-full sm:w-1/2">
 								<div>
 									<h3 className="mb-[10px] text-[24px] font-semibold">
-										Reset Password
+										Change Password
 									</h3>
 									<p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
 										Edit this section with caution
@@ -961,13 +1416,38 @@ const Profile: React.FC<any> = () => {
 							></div>
 							<div className="w-full md-920:w-1/2">
 								<Button
-									htmlType="submit"
+									type="primary"
 									block
-									loading={isLoading}
-									disabled={isLoading}
+									loading={isChangingPassword}
+									disabled={isChangingPassword}
 									className="my-[15px] p-[20px] text-white bg-[#581A57]"
+									onClick={async () => {
+										try {
+											setIsChangingPassword(true);
+											const values = await form.validateFields([
+												"current_password",
+												"new_password",
+												"confirm_password",
+											]);
+											const { current_password, new_password, confirm_password } = values;
+											if (!current_password || !new_password || !confirm_password) {
+												return onFailure("Please fill all password fields");
+											}
+											if (new_password !== confirm_password) {
+												return onFailure("New password and confirm password do not match");
+											}
+											await authRequests.changePassword({ current_password, new_password, confirm_password });
+											onSuccess("Password changed successfully");
+											form.setFieldsValue({ current_password: undefined, new_password: undefined, confirm_password: undefined });
+										} catch (err: any) {
+											if (err?.errorFields) return; // antd validation error, already shown
+											onFailure(err?.message || "Failed to change password");
+										} finally {
+											setIsChangingPassword(false);
+										}
+									}}
 								>
-									Send email to reset password
+									Change Password
 								</Button>
 							</div>
 						</div>

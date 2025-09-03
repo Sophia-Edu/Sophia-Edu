@@ -4,8 +4,9 @@ import { Col, Form, Input, Row, Button as AntDButton, FormProps } from "antd";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Logo, student, woman } from "../../../assets";
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
-import { AuthRequest } from "../../../requests";
-import { useAlert, useAuth } from "../../../store";
+import { AuthRequest, ClientRequest } from "../../../requests";
+import { useAlert, useAuth, useUser } from "../../../store";
+
 import { setStoredAuthToken } from "../../../utils/storage";
 import { APPCONSTANTS, URL as Urlconstant } from "../../../utils/constants";
 import { getTokenData } from "../../../utils/helperFunction";
@@ -18,17 +19,23 @@ type FieldType = {
 
 const Loginpage: React.FC<any> = () => {
 	const [loading, setLoading] = useState(false);
+	const [reactivateMode, setReactivateMode] = useState(false);
+
 	const { onFailure: AlertFailure, onSuccess } = useAlert();
 	const { onLogin } = useAuth();
 	const nav = useNavigate();
 	const location = useLocation();
+	const setUser = useUser((s) => s.setUser);
 
 	// Security check for redirect URLs
 	const isValidRedirect = (url: string) => {
 		try {
 			const { hostname, pathname } = new URL(url, window.location.origin);
-			return hostname === window.location.hostname &&
-				pathname.startsWith('/student'); // Only allow student routes
+			if (hostname !== window.location.hostname) return false;
+			// Block explicit admin/instructor areas
+			if (pathname.startsWith('/admin') || pathname.startsWith('/instructor')) return false;
+			// Allow same-origin app paths (including /posts/:id, /profile, / etc.)
+			return pathname.startsWith('/');
 		} catch {
 			return false;
 		}
@@ -50,16 +57,29 @@ const Loginpage: React.FC<any> = () => {
 	const onFinish: FormProps<FieldType>["onFinish"] = async (values: any) => {
 		setLoading(true);
 		try {
-			const res: any = await AuthRequest.login(values);
-			onSuccess("Login successful!");
-			onLogin(res?.access_token);
-			setStoredAuthToken(res?.access_token, "student");
-
-			// Redirect to safe URL after login
-			nav(getSafeRedirectUrl());
+			if (reactivateMode) {
+				const res: any = await ClientRequest.reactivate({ email: values.email, password: values.password });
+				onSuccess("Account reactivated!");
+				onLogin(res?.access_token);
+				setStoredAuthToken(res?.access_token, "student");
+				// refresh profile after reactivation
+				try {
+					const me: any = await ClientRequest.getMe();
+					if (me) setUser(me);
+				} catch {}
+				nav(getSafeRedirectUrl());
+			} else {
+				const res: any = await AuthRequest.login(values);
+				onSuccess("Login successful!");
+				onLogin(res?.access_token);
+				setStoredAuthToken(res?.access_token, "student");
+				// Redirect to safe URL after login
+				nav(getSafeRedirectUrl());
+			}
 		} catch (error: any) {
 			console.error("Login error:", error);
 			AlertFailure(error.message);
+			// If backend signals deactivated account via redirect param, user can switch manually
 		} finally {
 			setLoading(false);
 		}
@@ -92,8 +112,14 @@ const Loginpage: React.FC<any> = () => {
 		}
 	};
 
+	React.useEffect(() => {
+		const params = new URLSearchParams(location.search);
+		if (params.get('reactivate') === '1') setReactivateMode(true);
+	}, [location.search]);
+
 	return (
 		<div className="student_login">
+
 			<Row style={{}}>
 				{/* Desktop View */}
 				<Col xs={{ span: 0 }} lg={{ span: 12 }}>
@@ -114,10 +140,9 @@ const Loginpage: React.FC<any> = () => {
 								className="right-[1rem] xl:right-[15rem] bottom-[2rem]"
 							/>
 						</div>
-						<h2 className="inter-bold">Welcome Back!!</h2>
+						<h2>{reactivateMode ? 'Reactivate Account' : 'Login'}</h2>
 						<p className="inter-normal">
-							Learn your best academic skills, showcase your enterprise project
-							and connect with investors and employers!
+							{reactivateMode ? 'Enter your credentials to reactivate your account' : 'Enter email address and password to login'}
 						</p>
 					</div>
 				</Col>
@@ -130,10 +155,6 @@ const Loginpage: React.FC<any> = () => {
 								style={{ maxWidth: "100%", maxHeight: "100%" }}
 							/>
 						</Link>
-						<h2>Login</h2>
-						<p className="inter-normal">
-							Enter email address and password to login
-						</p>
 						<Form
 							layout="vertical"
 							initialValues={{ remember: true }}
@@ -178,9 +199,21 @@ const Loginpage: React.FC<any> = () => {
 									disabled={loading}
 									className="h-[50px] w-full !bg-[#581A57] !text-white p-5 hover:"
 								>
-									Log in
+									{reactivateMode ? 'Reactivate' : 'Log in'}
 								</AntDButton>
 							</Form.Item>
+							<div className="flex justify-center mb-2">
+								{!reactivateMode ? (
+									<button type="button" onClick={() => setReactivateMode(true)} className="text-sm underline" style={{color:'#581A57'}}>
+										Trouble logging in? Reactivate account
+									</button>
+								) : (
+									<button type="button" onClick={() => setReactivateMode(false)} className="text-sm underline" style={{color:'#581A57'}}>
+										Back to login
+									</button>
+								)}
+							</div>
+
 							<Form.Item
 								className="font-inter text-[16px] leading-[19.36px]"
 								style={{ textAlign: "center" }}

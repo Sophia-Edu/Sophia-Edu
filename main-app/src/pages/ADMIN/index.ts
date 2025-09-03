@@ -12,3 +12,4 @@ export { default as AdminCategoriesPage } from "./Categories/categories";
 export { default as AdminCreateCategoryPage } from "./Categories/create";
 export { default as AdminCreateInstructorPage } from "./Instructors/create";
 export { default as AdminLogin } from "./Login/Loginpage";
+export { default as AdminSubjectsIndustriesUploadPage } from "./SubjectsIndustries/upload";

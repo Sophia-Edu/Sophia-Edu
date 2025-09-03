@@ -1,17 +1,19 @@
 import {
     AboutCoursePage,
-	CertPage,
-	CourseLearningPage,
-	CourseListingPage,
-	GenerateCertPage,
-	Homepage,
-	MessagingInner,
-	MessagingPage,
-	MyProfilePage,
-	NotificationsPage,
-	OthersProfilePage,
-	UploadPage,
-	WalletPage,
+    CertPage,
+    CourseLearningPage,
+    CourseListingPage,
+    GenerateCertPage,
+    Homepage,
+    MessagingInner,
+    MessagingPage,
+    MyProfilePage,
+    NotificationsPage,
+    OthersProfilePage,
+    ProfileViewer,
+    UploadPage,
+    WalletPage,
+    PostViewer,
 } from "../pages/STUDENT";
 import { URL } from "../utils/constants";
 
@@ -21,6 +23,11 @@ const studentRoutes = [
         index: true,
         element: (<Homepage/>),
         name: 'Home',
+    },
+    {
+        path: URL.POST_DETAIL + ":id",
+        element: (<PostViewer />),
+        name: 'Post Detail',
     },
     {
         path: URL.COURSELISTING,
@@ -48,6 +55,16 @@ const studentRoutes = [
         name: 'Friend Profile',
     },
     {
+        path: "/profile/me",
+        element: <ProfileViewer />,
+        name: 'My Profile (View)',
+    },
+    {
+        path: URL.USER_PROFILE,
+        element: <ProfileViewer />,
+        name: 'Public Profile',
+    },
+    {
         path: URL.WALLET,
         element: <WalletPage />,
         name: 'Wallet',
@@ -58,9 +75,14 @@ const studentRoutes = [
         name: 'Certificate',
     },
     {
-        path: "/new/certificate",
+        path: URL.CERTIFICATE_VIEW,
         element: <CertPage />,
-        name: 'New Certificate',
+        name: 'My Certificate',
+    },
+    {
+        path: URL.CERTIFICATE_PUBLIC,
+        element: <CertPage />,
+        name: 'Public Certificate',
     },
     {
         path: URL.NOTIFICATION,
