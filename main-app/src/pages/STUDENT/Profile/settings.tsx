@@ -222,7 +222,7 @@ const Profile: React.FC<any> = () => {
               </h3>
               <p className="text-[#666666] text-[16px] w-full lg:w-[72%]">
                 Let our recommendation system suggest your preferred project
-                based on the subjects you follow
+                based on the subjects and industries you follow
               </p>
             </div>
           </div>
