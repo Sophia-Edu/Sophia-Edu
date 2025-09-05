@@ -30,7 +30,7 @@ const AboutPage: React.FC = () => {
 				</p>
 				<div className="div">
 					<a
-						href={"https://sophia-main-app.netlify.app/register"}
+						href={"https://sophiamain.netlify.app/register"}
 						target="_blank"
 					>
 						<Button className="abtBtn inter-medium">Sign Up</Button>

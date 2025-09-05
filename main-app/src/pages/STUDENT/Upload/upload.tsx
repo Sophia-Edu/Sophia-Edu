@@ -82,9 +82,7 @@ const Upload: React.FC<any> = () => {
     }
   };
 
-  const handleChange = (value: any) => {
-    console.log(`Selected: ${value}`);
-  };
+  // Removed unused handleChange to satisfy TypeScript -- use specific handlers instead
 
   // Local selection state for guidance rendering
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(null);

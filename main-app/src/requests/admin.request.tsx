@@ -41,6 +41,7 @@ class AdminRequests {
 			if (!file) {
 				throw new Error("Bulk upload requires a file (.csv or .xlsx) under 'file'.");
 			}
+			// Bulk uploads remain server-side as they typically require server processing
 			const form = new FormData();
 			form.append("file", file as any);
 			const response = await api.post(`/subjects/upload`, form, {

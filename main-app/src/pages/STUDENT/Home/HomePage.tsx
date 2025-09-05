@@ -94,13 +94,14 @@ const HomePage: React.FC = () => {
       });
       setPosts((prev) => (reset ? (mapped || []) : [...prev, ...(mapped || [])]));
       // Determine if there are more pages
-      const hasNext = Boolean(
-        (pagination as any)?.has_next ??
-        ((pagination as any)?.next_page != null) ??
-        (((pagination as any)?.total && (pagination as any)?.per_page && (pagination as any)?.page)
-          ? ((pagination as any).page * (pagination as any).per_page) < (pagination as any).total
-          : (((items as any)?.length ?? 0) === perPage))
-      );
+      // Normalize pagination checks: use explicit guards instead of nullish coalescing of boolean
+      const pag = pagination as any;
+      const hasNextFromFlag = typeof pag?.has_next === 'boolean' ? pag.has_next : undefined;
+      const hasNextFromNextPage = (pag?.next_page != null) ? true : undefined;
+      const hasNextFromCounts = (pag?.total && pag?.per_page && pag?.page)
+        ? ((pag.page * pag.per_page) < pag.total)
+        : (((items as any)?.length ?? 0) === perPage);
+      const hasNext = Boolean(hasNextFromFlag ?? hasNextFromNextPage ?? hasNextFromCounts);
       setHasMore(hasNext);
       if (hasNext) setPage(targetPage + 1);
     } catch (e) {

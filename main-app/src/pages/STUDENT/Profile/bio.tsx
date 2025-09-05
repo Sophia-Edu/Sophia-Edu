@@ -84,7 +84,9 @@ const Profile: React.FC<any> = () => {
 		licenses_certifications: initialProfileValues.licenses_certifications,
 		work_experience: initialProfileValues.work_experience,
 	});
-	const [profile, setProfile] = useState<UserProps | null>(initialProfileValues);
+	// Keep profile state for possible future use; avoid lint error by using it in effect
+	// Keep profile state for possible future use; prefix with underscore to avoid unused-var error
+	const [_profile, setProfile] = useState<UserProps | null>(initialProfileValues);
 	const fileInputRef: any = useRef(null);
 	const coverFileInputRef: any = useRef(null);
   // Follow Subjects/Industries state and loading

@@ -28,7 +28,7 @@ const Footer: React.FC = () => {
 							Get started and find your best courses
 						</h2>
 						<a
-							href={"https://sophia-main-app.netlify.app/register"}
+							href={"https://sophiamain.netlify.app/register"}
 							target="_blank"
 						>
 							<Button

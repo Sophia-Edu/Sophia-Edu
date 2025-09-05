@@ -1,5 +1,6 @@
 import api from "../Api";
 import {UserProps} from "../store";
+import { uploadFileToCloudinary } from "../utils/helperFunction";
 
 class ClientRequests {
     // Normalize a post response: accept flat object or { post: {...} } or AxiosResponse.data
@@ -188,42 +189,25 @@ class ClientRequests {
 
     uploadImage = async (img: File) => {
         try {
-            // Send multipart/form-data with field name "file"
-            const formData = new FormData();
-            formData.append("file", img);
-            const response = await api.post(`/upload_profile_image`, formData, {
-                headers: {
-                    "Content-Type": "multipart/form-data",
-                },
-            });
+            // Strict client-side upload to Cloudinary, then update profile with URL
+            const secureUrl = await uploadFileToCloudinary(img, 'image');
+            const response = await api.put(`/profile`, { profile_image: secureUrl });
             return response;
         } catch (error: any) {
-            // Extract the message or create a custom error message
-            console.log(error.response?.data);
-            const errorMessage =
-                error.response?.data?.error ||
-                error.response?.data?.message ||
-                "failed";
+            console.log(error?.response?.data ?? error?.message ?? error);
+            const errorMessage = error?.response?.data?.error || error?.response?.data?.message || error?.message || "failed";
             throw new Error(errorMessage);
         }
     };
 
     uploadCoverPhoto = async (img: File) => {
         try {
-            const formData = new FormData();
-            formData.append("file", img);
-            const response = await api.post(`/upload_cover_photo`, formData, {
-                headers: {
-                    "Content-Type": "multipart/form-data",
-                },
-            });
+            const secureUrl = await uploadFileToCloudinary(img, 'image');
+            const response = await api.put(`/profile`, { cover_photo: secureUrl });
             return response;
         } catch (error: any) {
-            console.log(error.response?.data);
-            const errorMessage =
-                error.response?.data?.error ||
-                error.response?.data?.message ||
-                "failed";
+            console.log(error?.response?.data ?? error?.message ?? error);
+            const errorMessage = error?.response?.data?.error || error?.response?.data?.message || error?.message || "failed";
             throw new Error(errorMessage);
         }
     };
@@ -272,32 +256,69 @@ class ClientRequests {
 
     sendMessage = async (payload: any) => {
         try {
-            // Support both JSON and multipart/form-data
-            // If payload is a FormData or contains a File/Blob, post as multipart
+            // Strict client-side: if file present (FormData or object), upload to Cloudinary
             let response;
+
+            // Helper to pull values out of FormData
+            const extractFromFormData = (fd: FormData) => {
+                const obj: any = {};
+                fd.forEach((value, key) => {
+                    if (key === 'file') obj.file = value;
+                    else obj[key] = value;
+                });
+                return obj;
+            };
+
+            let dataObj: any = null;
             if (typeof FormData !== 'undefined' && payload instanceof FormData) {
-                response = await api.post(`/messages`, payload, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                });
+                dataObj = extractFromFormData(payload);
             } else if (payload && (payload.file instanceof File || payload.file instanceof Blob)) {
-                const form = new FormData();
-                if (payload.recipient_id != null) form.append('recipient_id', String(payload.recipient_id));
-                if (payload.content != null) form.append('content', String(payload.content));
-                form.append('file', payload.file);
-                response = await api.post(`/messages`, form, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                });
+                dataObj = payload;
+            }
+
+            if (dataObj && (dataObj.file instanceof File || dataObj.file instanceof Blob)) {
+                const file: File | Blob = dataObj.file as File | Blob;
+                // Upload to Cloudinary
+                console.debug('Sending message: starting Cloudinary upload for file', (file as any)?.name ?? file);
+                const secureUrl = await uploadFileToCloudinary(file, 'auto');
+                console.debug('Sending message: Cloudinary upload returned secureUrl=', secureUrl);
+
+                // Validate returned URL is for configured Cloudinary cloud name
+                const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME as string;
+                if (!CLOUD_NAME) {
+                    console.error('VITE_CLOUDINARY_CLOUD_NAME is not set');
+                    throw new Error('VITE_CLOUDINARY_CLOUD_NAME is not set');
+                }
+                try {
+                    const parsed = new URL(secureUrl);
+                    const isCloudinaryHost = parsed.hostname.endsWith('cloudinary.com');
+                    const hasCloudName = parsed.pathname.includes(`/${CLOUD_NAME}/`);
+                    if (!isCloudinaryHost || !hasCloudName) {
+                        throw new Error('Cloudinary upload returned a URL that does not match the configured cloud name');
+                    }
+                } catch (err: any) {
+                    console.error('Invalid Cloudinary URL returned:', secureUrl, err?.message ?? err);
+                    throw new Error('Invalid Cloudinary URL returned from upload');
+                }
+
+                const body: any = {};
+                if (dataObj.recipient_id != null) body.recipient_id = dataObj.recipient_id;
+                if (dataObj.content != null) body.content = dataObj.content;
+                body.attachment_url = secureUrl;
+                console.debug('Sending message: POST /messages body=', body);
+                response = await api.post(`/messages`, body);
+            } else if (dataObj) {
+                // no file, but was FormData or object -> send as JSON
+                response = await api.post(`/messages`, dataObj);
             } else {
+                // plain object payload without files
                 response = await api.post(`/messages`, payload);
             }
+
             return response;
         } catch (error: any) {
-            // Extract the message or create a custom error message
-            console.log(error.response?.data);
-            const errorMessage =
-                error.response?.data?.error ||
-                error.response?.data?.message ||
-                "failed";
+            console.log(error?.response?.data ?? error?.message ?? error);
+            const errorMessage = error?.response?.data?.error || error?.response?.data?.message || error?.message || "failed";
             throw new Error(errorMessage);
         }
     };
@@ -623,18 +644,18 @@ class ClientRequests {
                 || (payload?.documentFile instanceof File || payload?.documentFile instanceof Blob);
 
             if (fileLike) {
-                const form = new FormData();
+                // Strict client-side upload: upload document to Cloudinary, then send URL to backend
+                const file = payload.document || payload.file || payload.documentFile;
+                const secureUrl = await uploadFileToCloudinary(file, 'auto');
+                const body: any = {};
                 const keys = ['title','executive_summary','executiveSummary','subject','doi_link','doiLink','video_link','videoLink'];
                 keys.forEach((k) => {
                     const v = (payload as any)[k];
-                    if (v != null) form.append(mapKey(k), String(v));
+                    if (v != null) body[mapKey(k)] = v;
                 });
-                // Prefer explicit 'document', but accept common aliases
-                const file = payload.document || payload.file || payload.documentFile;
-                if (file) form.append('document', file);
-                const response = await api.post(`/user/posts`, form, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                });
+                // backend expects 'document' or similar; send as document_url
+                body.document_url = secureUrl;
+                const response = await api.post(`/user/posts`, body);
                 return this.pickPost(response);
             }
 
@@ -1049,20 +1070,14 @@ class ClientRequests {
         }
     }
 
-    uploadCertificateAsset = async (file: File | Blob, filename?: string) => {
+    uploadCertificateAsset = async (file: File | Blob, _filename?: string) => {
         try {
-            const form = new FormData();
-            form.append("file", file as any, filename as any);
-            const res: any = await api.post(`/certificates/uploads`, form, {
-                headers: { "Content-Type": "multipart/form-data" },
-            });
-            return res; // { url }
+            // Strict client-side upload to Cloudinary, return URL to be saved by backend
+            const secureUrl = await uploadFileToCloudinary(file as any, 'auto');
+            return { url: secureUrl };
         } catch (error: any) {
             console.log(error);
-            const errorMessage =
-                error.response?.data?.error ||
-                error.response?.data?.message ||
-                "failed";
+            const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || "failed";
             throw new Error(errorMessage);
         }
     }

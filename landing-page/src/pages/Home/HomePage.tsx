@@ -40,7 +40,7 @@ const HomePage: React.FC = () => {
 							employers!
 						</p>
 						<a
-							href={"https://sophia-main-app.netlify.app/register"}
+							href={"https://sophiamain.netlify.app/register"}
 							target="_blank"
 						>
 							<Button>Sign Up</Button>

@@ -65,35 +65,49 @@ export const countWords = (text: string): number => {
 };
 
 export const uploadImageToCloudinary = async (file: any) => {
+	const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME as string;
+	const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET as string;
+
+	if (!CLOUD_NAME) throw new Error('VITE_CLOUDINARY_CLOUD_NAME is not set');
+	if (!UPLOAD_PRESET) throw new Error('VITE_CLOUDINARY_UPLOAD_PRESET is not set');
+
 	const formData = new FormData();
 	formData.append("file", file);
-	formData.append("upload_preset", "cnu26mth"); // Cloudinary upload preset
+	formData.append("upload_preset", UPLOAD_PRESET); // Cloudinary upload preset
 
 	try {
 		const response = await axios.post(
-			"https://api.cloudinary.com/v1_1/djl1v3zvi/image/upload", // Cloudinary URL
+			`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, // Cloudinary URL
 			formData
 		);
 		return response.data.secure_url; // Return the uploaded image URL
-	} catch (error) {
-		throw new Error("Failed to upload image");
+	} catch (error: any) {
+		console.error('Cloudinary upload error:', error.response?.data ?? error.message ?? error);
+		throw new Error(error.response?.data?.error?.message || 'Failed to upload image');
 	}
 };
 
 export const uploadFileToCloudinary = async (file: any, resourceType: 'image' | 'video' | 'auto' = 'auto') => {
+	const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME as string;
+	const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET as string;
+
+	if (!CLOUD_NAME) throw new Error('VITE_CLOUDINARY_CLOUD_NAME is not set');
+	if (!UPLOAD_PRESET) throw new Error('VITE_CLOUDINARY_UPLOAD_PRESET is not set');
+
 	const formData = new FormData();
 	formData.append("file", file);
-	formData.append("upload_preset", "cnu26mth"); // Cloudinary upload preset
+	formData.append("upload_preset", UPLOAD_PRESET); // Cloudinary upload preset
 
 	try {
 		// Use the appropriate resource type for different file types
 		const response = await axios.post(
-			`https://api.cloudinary.com/v1_1/djl1v3zvi/${resourceType}/upload`, // Cloudinary URL with resource type
+			`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${resourceType}/upload`, // Cloudinary URL with resource type
 			formData
 		);
 		return response.data.secure_url; // Return the uploaded file URL
-	} catch (error) {
-		throw new Error(`Failed to upload ${resourceType}`);
+	} catch (error: any) {
+		console.error('Cloudinary upload error:', error.response?.data ?? error.message ?? error);
+		throw new Error(error.response?.data?.error?.message || `Failed to upload ${resourceType}`);
 	}
 };
 
