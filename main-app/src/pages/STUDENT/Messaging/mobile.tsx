@@ -15,28 +15,27 @@ const Messaging: React.FC<any> = () => {
     const [messages, setMessages] = useState<any[]>([]);
     const [sending, setSending] = useState(false);
     const [messageText, setMessageText] = useState("");
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
-    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    // Remove file upload related state
+    // const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    // const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [selectedUser, setSelectedUser] = useState<{ id: number; full_name: string; profile_image?: string | null } | null>(null);
 
     const [hasMore, setHasMore] = useState(true);
 
     const sendMessage = async (msg: string) => {
-        if (!selectedUser || (!msg.trim() && !selectedFile)) return;
+        if (!selectedUser || !msg.trim()) return;
         setSending(true);
-        const payload: any = { recipient_id: selectedUser.id };
-        if (msg.trim()) payload.content = msg.trim();
-        if (selectedFile) payload.file = selectedFile;
         try {
-            await clientRequests.sendMessage(payload);
-            // refresh to get attachment_url
+            await clientRequests.sendMessage({
+                recipient_id: selectedUser.id,
+                content: msg.trim()
+            });
+            // refresh to get messages
             await fetchConversation(selectedUser.id);
             setMessageText("");
-            setSelectedFile(null);
             message.success("message sent");
         } catch (error: any) {
             message.error(error.message);
-            throw error;
         } finally {
             setSending(false);
         }
@@ -168,7 +167,7 @@ const Messaging: React.FC<any> = () => {
                                     onPressEnter={(e) => { e.preventDefault(); sendMessage(messageText); }}
                                 />
                                 {/* Hidden file input */}
-                                <input
+                                {/* <input
                                     ref={fileInputRef}
                                     type="file"
                                     className="hidden"
@@ -177,21 +176,21 @@ const Messaging: React.FC<any> = () => {
                                         const f = e.target.files?.[0] || null;
                                         setSelectedFile(f || null);
                                     }}
-                                />
+                                /> */}
                                 <div className="mt-3 flex items-center justify-between">
                                     <div className="flex items-center gap-2 min-w-0">
-                                        <button
+                                        {/* <button
                                             type="button"
                                             className="px-3 py-1 text-sm bg-white text-[#581A57] border border-[#E5E5E5] rounded shadow-sm hover:bg-gray-50"
                                             onClick={() => fileInputRef.current?.click()}
                                         >
                                             Upload
-                                        </button>
-                                        {selectedFile && (
+                                        </button> */}
+                                        {/* {selectedFile && (
                                             <span className="text-[12px] text-gray-700 truncate max-w-[50vw]">
                                                 {selectedFile.name}
                                             </span>
-                                        )}
+                                        )} */}
                                     </div>
                                     {!sending ? (
                                         <button
@@ -199,8 +198,8 @@ const Messaging: React.FC<any> = () => {
                                             aria-label="Send message"
                                             className="p-2 rounded-full hover:bg-gray-100"
                                             onClick={() => sendMessage(messageText)}
-                                            disabled={!selectedUser || (!messageText.trim() && !selectedFile)}
-                                            style={{ opacity: !selectedUser || (!messageText.trim() && !selectedFile) ? 0.5 : 1, cursor: !selectedUser || (!messageText.trim() && !selectedFile) ? 'not-allowed' : 'pointer' }}
+                                            disabled={!selectedUser || (!messageText.trim())}
+                                            style={{ opacity: !selectedUser || (!messageText.trim()) ? 0.5 : 1, cursor: !selectedUser || (!messageText.trim()) ? 'not-allowed' : 'pointer' }}
                                         >
                                             <SendArrow className="pointer-events-none" />
                                         </button>

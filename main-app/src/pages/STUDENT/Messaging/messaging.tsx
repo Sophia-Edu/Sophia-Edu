@@ -21,8 +21,9 @@ const Messaging: React.FC<any> = () => {
   const [messages, setMessages] = useState<any[]>([]);
   const [sending, setSending] = useState(false);
   const [messageText, setMessageText] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Remove file upload related state
+  // const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  // const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeRecipient, setComposeRecipient] = useState<{ id: number; full_name: string } | null>(null);
   const [composeContent, setComposeContent] = useState<string>("");
@@ -123,26 +124,20 @@ const Messaging: React.FC<any> = () => {
     }, 300);
     return () => clearTimeout(id);
   }, [searchTerm]);
-  const sendMessage = async (msg: string) => {
-    if (!selectedUser) {
-      message.warning("Select a chat user first");
-      return;
-    }
-    if (!msg.trim() && !selectedFile) return;
+  const sendMessage = async () => {
+    if (!selectedUser || !messageText.trim()) return;
     setSending(true);
-    const payload: any = { recipient_id: selectedUser.id };
-    if (msg.trim()) payload.content = msg.trim();
-    if (selectedFile) payload.file = selectedFile;
     try {
-      await clientRequests.sendMessage(payload);
-      // Refresh the thread to include server-generated attachment_url
+      await clientRequests.sendMessage({
+        recipient_id: selectedUser.id,
+        content: messageText.trim()
+      });
+      // Refresh messages
       await fetchConversation(selectedUser.id);
       setMessageText("");
-      setSelectedFile(null);
       message.success("message sent");
     } catch (error: any) {
       message.error(error.message);
-      throw error;
     } finally {
       setSending(false);
     }
@@ -415,17 +410,17 @@ const Messaging: React.FC<any> = () => {
                   <p>Select a chat to view messages</p>
                 </div>
               )}
-              <Form className="mt-2 w-full" onSubmitCapture={(e) => { e.preventDefault(); sendMessage(messageText); }}>
+              <Form className="mt-2 w-full" onSubmitCapture={(e) => { e.preventDefault(); sendMessage(); }}>
                 <Input
                   className="w-full bg-[#F5F5F5] focus:bg-[#F5F5F5] hover:bg-[#F5F5F5] focus:border-0 hover:border-0 rounded-[50px] px-[19px] py-[15px]"
                   name="message"
                   placeholder="Type your message here"
                   value={messageText}
                   onChange={(e) => setMessageText(e.target.value)}
-                  onPressEnter={(e) => { e.preventDefault(); sendMessage(messageText); }}
+                  onPressEnter={(e) => { e.preventDefault(); sendMessage(); }}
                 />
                 {/* Hidden file input */}
-                <input
+                {/* <input
                   ref={fileInputRef}
                   type="file"
                   className="hidden"
@@ -434,9 +429,9 @@ const Messaging: React.FC<any> = () => {
                     const f = e.target.files?.[0] || null;
                     setSelectedFile(f || null);
                   }}
-                />
+                /> */}
                 <div className="mt-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
+                  {/* <div className="flex items-center gap-2 min-w-0">
                     <button
                       type="button"
                       className="px-3 py-1 text-sm bg-white text-[#581A57] border border-[#E5E5E5] rounded shadow-sm hover:bg-gray-50"
@@ -449,15 +444,15 @@ const Messaging: React.FC<any> = () => {
                         {selectedFile.name}
                       </span>
                     )}
-                  </div>
+                  </div> */}
                   {!sending ? (
                     <button
                       type="button"
                       aria-label="Send message"
                       className="p-2 rounded-full hover:bg-gray-100"
-                      onClick={() => sendMessage(messageText)}
-                      disabled={!selectedUser || (!messageText.trim() && !selectedFile)}
-                      style={{ opacity: !selectedUser || (!messageText.trim() && !selectedFile) ? 0.5 : 1, cursor: !selectedUser || (!messageText.trim() && !selectedFile) ? 'not-allowed' : 'pointer' }}
+                      onClick={sendMessage}
+                      disabled={!selectedUser || !messageText.trim()}
+                      style={{ opacity: !selectedUser || !messageText.trim() ? 0.5 : 1, cursor: !selectedUser || !messageText.trim() ? 'not-allowed' : 'pointer' }}
                     >
                       <SendArrow className="pointer-events-none" />
                     </button>

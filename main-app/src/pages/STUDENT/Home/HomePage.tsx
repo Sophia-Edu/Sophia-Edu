@@ -29,11 +29,16 @@ const HomePage: React.FC = () => {
   const { user } = useUser();
   const isSubscribed = Boolean(user?.is_subscribed);
   const [isExpanded, setIsExpanded] = useState(false); // Track if summary is expanded
-  const maxLength = 20; // Maximum length for truncated summary
+  const maxWords = 100; // Maximum words for truncated summary
 
   // Toggle between expanded and truncated summary
   const toggleSummary = () => {
     setIsExpanded(!isExpanded);
+  };
+
+  // Helper function to count words
+  const countWords = (text: string): number => {
+    return text.trim().split(/\s+/).filter(Boolean).length;
   };
 
   // payment disabled
@@ -610,11 +615,12 @@ const HomePage: React.FC = () => {
                           const summary = getPostSummary(post);
                           if (!summary) return '';
                           if (isExpanded) return summary;
-                          return summary.length > maxLength ? `${summary.slice(0, maxLength)}...` : summary;
+                          const words = summary.trim().split(/\s+/);
+                          return words.length > maxWords ? words.slice(0, maxWords).join(' ') + '...' : summary;
                         })()}
                         {(() => {
                           const summary = getPostSummary(post);
-                          return summary && summary.length > maxLength;
+                          return summary && countWords(summary) > maxWords;
                         })() && (
                           <span
                             className="text-[#581a57] cursor-pointer"
