@@ -56,14 +56,16 @@ const Layout: React.FC<any> = ({ children }) => {
 	const learningMenu: any = (
 		<Menu>
 			<Menu.Item key="development" onClick={() => navigate(URL.COURSELISTING)}>
-				Learning Development Courses
+				<span className="hidden sm:inline">Learning Development Courses</span>
+				<span className="sm:hidden">Learning Development</span>
 			</Menu.Item>
 			<Menu.Item
 				key="social"
 				title="Entrepreneurship and Innovation courses"
 				onClick={() => navigate(URL.COURSELISTING, { state: "social" })}
 			>
-				Entrepreneurship and Innovation Courses
+				<span className="hidden sm:inline">Entrepreneurship and Innovation Courses</span>
+				<span className="sm:hidden">Entrepreneurship and Innovation</span>
 			</Menu.Item>
 		</Menu>
 	);

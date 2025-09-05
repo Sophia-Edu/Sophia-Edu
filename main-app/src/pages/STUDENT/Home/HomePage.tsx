@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { Helmet } from 'react-helmet-async';
 import Layout from "../../Layout";
 import {
   AddressLocator,
@@ -13,6 +14,7 @@ import {
   ThreeDotsIcon,
   WarningIcon,
   Logo,
+  ShareIcon,
 } from "../../../assets";
 import { Button, Modal } from "../../../components";
 import { Dropdown, Input, MenuProps, Space, message, Modal as AntModal, Select } from "antd";
@@ -20,6 +22,8 @@ import { useNavigate } from "react-router-dom";
 import { URL } from "../../../utils/constants";
 import { useUser } from "../../../store";
 import { getAvatar } from "../../../utils/helperFunction";
+import { maskUrl } from "../../../utils/urlMask";
+import { ShareButton } from "../../../components/share/ShareButton";
 import { ClientRequest } from "../../../requests";
 
 const { Option } = Select;
@@ -30,6 +34,18 @@ const HomePage: React.FC = () => {
   const isSubscribed = Boolean(user?.is_subscribed);
   const [isExpanded, setIsExpanded] = useState(false); // Track if summary is expanded
   const maxWords = 100; // Maximum words for truncated summary
+
+  // Helper function to open share window
+  const openShareWindow = (url: string) => {
+    const w = 600;
+    const h = 500;
+    const y = window.top?.outerHeight ? Math.max((window.top!.outerHeight - h) / 2, 0) : 100;
+    const x = window.top?.outerWidth ? Math.max((window.top!.outerWidth - w) / 2, 0) : 100;
+    window.open(url, '_blank', `toolbar=1,location=1,status=1,menubar=0,scrollbars=1,resizable=1,width=${w},height=${h},left=${x},top=${y}`);
+  };
+
+  // Handle sharing to different platforms
+  // Sharing is now handled by the ShareButton component
 
   // Toggle between expanded and truncated summary
   const toggleSummary = () => {
@@ -231,55 +247,7 @@ const HomePage: React.FC = () => {
     }
   };
 
-  // Removed Share/Repost and Save per request
-  // Off-platform Share: build permalink and use Web Share API or clipboard
-  const getPermalink = (post: any) => `${window.location.origin}/posts/${post.id}`; // Adjust path to your public route if needed
-
-  const openShareWindow = (url: string) => {
-    const w = 600;
-    const h = 500;
-    const y = window.top?.outerHeight ? Math.max((window.top!.outerHeight - h) / 2, 0) : 100;
-    const x = window.top?.outerWidth ? Math.max((window.top!.outerWidth - w) / 2, 0) : 100;
-    window.open(url, '_blank', `toolbar=0,location=0,status=0,menubar=0,scrollbars=1,resizable=1,width=${w},height=${h},left=${x},top=${y}`);
-  };
-
-  // No copy/system/email per request
-
-  const shareTo = async (platform: string, post: any) => {
-    const permalink = getPermalink(post);
-    const title = encodeURIComponent(post?.title || 'Check this post');
-    const url = encodeURIComponent(permalink);
-
-    try {
-      switch (platform) {
-        case 'whatsapp':
-          openShareWindow(`https://wa.me/?text=${title}%20${url}`);
-          return;
-        case 'twitter': // X
-          openShareWindow(`https://twitter.com/intent/tweet?text=${title}&url=${url}`);
-          return;
-        case 'linkedin':
-          openShareWindow(`https://www.linkedin.com/sharing/share-offsite/?url=${url}`);
-          return;
-        case 'facebook':
-          openShareWindow(`https://www.facebook.com/sharer/sharer.php?u=${url}`);
-          return;
-        case 'telegram':
-          openShareWindow(`https://t.me/share/url?url=${url}&text=${title}`);
-          return;
-        case 'instagram':
-          // Instagram has no official web share endpoint for links;
-          // open Instagram and instruct user to paste the link.
-          openShareWindow(`https://www.instagram.com/?url=${url}`);
-          message.info('Instagram does not support direct web link sharing. Paste the link in your post.');
-          return;
-        default:
-          return;
-      }
-    } catch (e: any) {
-      message.error(e?.message || 'Could not share');
-    }
-  };
+  // Sharing functionality is already defined above
 
   // Note: sharing is handled via shareTo() and the Dropdown menu
 
@@ -488,6 +456,27 @@ const HomePage: React.FC = () => {
   };
   return (
     <Layout>
+      {/* Add Helmet for SEO and social sharing metadata */}
+      <Helmet>
+        {/* Basic meta */}
+        <title>Sophia | Educational Content Feed</title>
+        <meta name="description" content="Discover and share educational content on Sophia" />
+        
+        {/* Open Graph / Facebook */}
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={window.location.href} />
+        <meta property="og:site_name" content="Sophia" />
+        <meta property="og:title" content="Sophia | Educational Content Feed" />
+        <meta property="og:description" content="Discover and share educational content on Sophia" />
+        <meta property="og:image" content={`${window.location.origin}/logo.svg`} />
+        
+        {/* Twitter */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:url" content={window.location.href} />
+        <meta name="twitter:title" content="Sophia | Educational Content Feed" />
+        <meta name="twitter:description" content="Discover and share educational content on Sophia" />
+        <meta name="twitter:image" content={`${window.location.origin}/logo.svg`} />
+      </Helmet>
       <div className="flex lg:flex-row flex-col px-[10px] lg:px-[80px] gap-4 items-start pb-[20px] min-h-screen">
         {/* First Section */}
         <div className="order-1 hidden lg:flex w-full flex-[0.25] min-h-[300px] sm:min-h-[400px] bg-white rounded-lg border-[#B6B6B6] border flex-col items-center justify-center">
@@ -664,7 +653,7 @@ const HomePage: React.FC = () => {
                             className="text-xs text-[#581A57] font-light flex items-center gap-1 opacity-60 cursor-not-allowed"
                             title="Subscribe to access"
                           >
-                            <LinkIcon /> {post.video_link}
+                            <LinkIcon /> {maskUrl(post.video_link)}
                           </span>
                         )
                       )}
@@ -691,7 +680,7 @@ const HomePage: React.FC = () => {
                             className="text-xs text-[#581A57] font-light flex items-center gap-1 opacity-60 cursor-not-allowed"
                             title="Subscribe to access"
                           >
-                            <WarningIcon /> {post?.doi_link}
+                            <WarningIcon /> {maskUrl(post?.doi_link)}
                           </span>
                         )
                       )}
@@ -707,9 +696,9 @@ const HomePage: React.FC = () => {
                 </div>
                 {/* Footer */}
                 <div className="flex justify-between items-center text-[xx-small] sm:text-[small]">
-                  <div className="flex gap-1 sm:gap-2 items-center ">
+                  <div className="flex gap-3 sm:gap-2 items-center justify-start w-full">
                     <button
-                      className={`flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center ${post.user_vote === 'upvote' ? 'text-[#581A57]' : ''}`}
+                      className={`flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center justify-center min-w-[40px] sm:min-w-0 ${post.user_vote === 'upvote' ? 'text-[#581A57]' : ''}`}
                       onClick={() => handleVote(post.id, 'upvote')}
                     >
                       <LikeIcon className="w-[10px] sm:w-[12px]" />
@@ -717,48 +706,31 @@ const HomePage: React.FC = () => {
                     </button>
 
                     <button
-                      className={`flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center ${post.user_vote === 'downvote' ? 'text-[#581A57]' : ''}`}
+                      className={`flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center justify-center min-w-[40px] sm:min-w-0 ${post.user_vote === 'downvote' ? 'text-[#581A57]' : ''}`}
                       onClick={() => handleVote(post.id, 'downvote')}
                     >
                       <DislikeIcon className="w-[10px] sm:w-[12px]" />
                       <span>Downvote</span>
                     </button>
                     <button
-                      className="flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center"
+                      className="flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center justify-center min-w-[40px] sm:min-w-0"
                       onClick={() => toggleComments(post.id)}
                     >
                       <CommentIcon className="w-[10px] sm:w-[12px]" />
                       <span>Comment</span>
                     </button>
-                    <Dropdown
-                      menu={{
-                        items: [
-                          { key: 'whatsapp', label: <div onClick={() => shareTo('whatsapp', post)}>WhatsApp</div> },
-                          { key: 'twitter', label: <div onClick={() => shareTo('twitter', post)}>Twitter/X</div> },
-                          { key: 'linkedin', label: <div onClick={() => shareTo('linkedin', post)}>LinkedIn</div> },
-                          { key: 'facebook', label: <div onClick={() => shareTo('facebook', post)}>Facebook</div> },
-                          { key: 'telegram', label: <div onClick={() => shareTo('telegram', post)}>Telegram</div> },
-                          { key: 'instagram', label: <div onClick={() => shareTo('instagram', post)}>Instagram</div> },
-                        ] as MenuProps['items'],
-                      }}
-                      trigger={["click"]}
-                    >
-                      <button
-                        className="flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center"
-                      >
-                        <span>Share</span>
-                      </button>
-                    </Dropdown>
+                    <div className="flex items-center mx-2 sm:mx-4">
+                      <ShareButton
+                        postId={post.id}
+                        title={post.title}
+                        summary={post.summary || post.description}
+                      />
+                    </div>
                   </div>
 
-                  <div className="flex  gap-1 sm:gap-2 items-center">
+                  <div className="flex gap-2 sm:gap-3 items-center ml-2 sm:ml-0">
                     <p className="flex flex-col sm:flex-row font-inter font-[300] leading-[12.1px] lg:text-[12px] text-[8px] gap-1 sm:gap-2 items-center">
-                      <span
-                        style={{ visibility: "hidden" }}
-                        className="sm:!hidden"
-                      >
-                        <IndicatorIcon color="#2D2D2D" />
-                      </span>
+                      <IndicatorIcon color="#2D2D2D" />
                       <span>{post.upvote_count ?? 0} Upvote</span>
                     </p>
 
@@ -860,7 +832,10 @@ const HomePage: React.FC = () => {
                 className="bg-[#F5F5F5] p-2 rounded-sm mb-2"
                 key={i}
               >
-                <p className="playfair-display-normal text-[#121212] leading-[25.6px] text-[14px] sm:text-[16px]">
+                <p 
+                  className="playfair-display-normal text-[#121212] leading-[25.6px] text-[14px] sm:text-[16px] cursor-pointer hover:underline"
+                  onClick={() => nav(`/posts/${it?.id}`)}
+                >
                   {it?.title}
                 </p>
                 {(() => {
@@ -910,10 +885,12 @@ const HomePage: React.FC = () => {
           >
             <Option value="enrolled">Enrolled</Option>
             <Option value="Social Entrepreneurship and Innovation courses">
-              Social Entrepreneurship and Innovation courses
+              <span className="hidden sm:inline">Social Entrepreneurship and Innovation courses</span>
+              <span className="sm:hidden">Social Entrepreneurship and Innovation</span>
             </Option>
             <Option value="Learning Development courses">
-              Learning Development courses
+              <span className="hidden sm:inline">Learning Development courses</span>
+              <span className="sm:hidden">Learning Development</span>
             </Option>
             <Option value="applied_science" disabled>
               Others

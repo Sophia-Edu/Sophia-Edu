@@ -3,6 +3,25 @@ import React from "react";
 export { default as Logo } from "./images/logo.svg";
 export { default as audioIcon } from "./icons/audioIcon.svg";
 export { default as certificateIcon } from "./icons/certificateIcon.svg";
+
+export const ShareIcon: React.FC<{ className?: string }> = ({ className }) => {
+  return (
+    <svg 
+      width="24" 
+      height="24" 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path d="M16 3C14.8954 3 14 3.89543 14 5C14 6.10457 14.8954 7 16 7C17.1046 7 18 6.10457 18 5C18 3.89543 17.1046 3 16 3Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M6 12C4.89543 12 4 12.8954 4 14C4 15.1046 4.89543 16 6 16C7.10457 16 8 15.1046 8 14C8 12.8954 7.10457 12 6 12Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M16 17C14.8954 17 14 17.8954 14 19C14 20.1046 14.8954 21 16 21C17.1046 21 18 20.1046 18 19C18 17.8954 17.1046 17 16 17Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M7.87012 15.1202L14.1301 17.8802" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M14.1301 6.12012L7.87012 8.88012" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+};
 export { default as discIcon } from "./icons/discIcon.svg";
 export { default as laptopIcon } from "./icons/laptopIcon.svg";
 export { default as circleHeartIcon } from "./icons/circleHeartIcon.svg";

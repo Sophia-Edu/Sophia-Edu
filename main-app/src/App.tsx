@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import "./App.scss";
 import Router from "./routes/routes";
 import { toast, ToastContainer } from "react-toastify";
+import { HelmetProvider } from 'react-helmet-async';
 import "react-toastify/dist/ReactToastify.css";
 import { useAlert } from "./store";
 import { Elements } from "@stripe/react-stripe-js";
@@ -10,6 +11,7 @@ import { loadStripe } from "@stripe/stripe-js";
 function App() {
 	const { status, message, onReset } = useAlert();
 	const stripePromise = loadStripe("your-publishable-key-here");
+	const helmetContext = {};
 	// Listen to changes in status and display toast accordingly
 	useEffect(() => {
 		if (status && message) {
@@ -25,10 +27,12 @@ function App() {
 		}
 	}, [status, message, onReset]);
 	return (
-		<Elements stripe={stripePromise}>
-			<ToastContainer />
-			<Router />
-		</Elements>
+		<HelmetProvider>
+			<Elements stripe={stripePromise}>
+				<ToastContainer />
+				<Router />
+			</Elements>
+		</HelmetProvider>
 	);
 }
 

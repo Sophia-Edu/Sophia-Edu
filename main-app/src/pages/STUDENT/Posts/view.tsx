@@ -137,9 +137,6 @@ const PostViewer: React.FC = () => {
         ) : (
           <div className="bg-white p-4 rounded">
             <h1 className="text-xl font-semibold mb-2">{post?.title}</h1>
-            {post?.subject && (
-              <p className="text-sm text-[#581A57] mb-2">Subject: <span className="font-medium">{post.subject}</span></p>
-            )}
             {getSummary(post) && (
               <p className="text-sm text-[#666] mb-3">{getSummary(post)}</p>
             )}
