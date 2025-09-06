@@ -8,4 +8,25 @@
 		border: none !important;
 		outline: none !important;
 	}
+
+	/* Write-up paragraph: justified on desktop and mobile for consistent reading */
+	.writeup {
+		text-align: justify;
+		line-height: 1.6;
+		color: #333;
+		/* small horizontal padding for narrow screens */
+		padding: 0 6px;
+	}
+
+	/* Larger screens: align left start (justified still applies) and add left padding to match layout */
+	@media (min-width: 640px) {
+		.writeup {
+			/* shift the block to the right to line up with form fields */
+			margin-left: 33%;
+			margin-right: 0;
+			padding-left: 0;
+			/* limit width so text doesn't underflow into the left gap */
+			max-width: 67%;
+		}
+	}
 }

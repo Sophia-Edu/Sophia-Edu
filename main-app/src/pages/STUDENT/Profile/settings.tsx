@@ -6,12 +6,15 @@ import { HeatMapOutlined } from "@ant-design/icons";
 import "./profile.styles.scss";
 import { useUser } from "../../../store";
 import api from "../../../Api";
+import FollowTree from "../../../components/FollowTree";
 
 const Profile: React.FC<any> = () => {
   const { user } = useUser();
   const [form] = Form.useForm();
   const [subjects, setSubjects] = useState<Array<{ id: number; name: string }>>([]);
+  const [subjectsTree, setSubjectsTree] = useState<any[]>([]);
   const [industries, setIndustries] = useState<Array<{ id: number; name: string }>>([]);
+  const [industriesTree, setIndustriesTree] = useState<any[]>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [loadingIndustries, setLoadingIndustries] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -36,7 +39,29 @@ const Profile: React.FC<any> = () => {
       try {
         setLoadingSubjects(true);
         const res = (await api.get("/subjects_for_follow")) as any;
-        setSubjects((Array.isArray(res) ? res : []) as Array<{ id: number; name: string }>);
+        console.debug('/subjects_for_follow raw (settings):', res);
+        const raw = res;
+        const tree = raw?.tree ?? raw;
+        let list: any[] = [];
+        if (Array.isArray(tree)) list = tree;
+        else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
+        else if (Array.isArray(raw?.flat)) list = raw.flat;
+  const flatten = (nodes: any[]): any[] => {
+          const out: any[] = [];
+          const walk = (arr: any[]) => {
+            (arr || []).forEach((n) => {
+              if (!n) return;
+              if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+              else if (Array.isArray(n.children)) walk(n.children);
+            });
+          };
+          walk(nodes || []);
+          return out;
+        };
+  let leaves = flatten(list);
+  leaves = leaves.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
+  setSubjects(leaves as Array<{ id: number; name: string }>);
+  setSubjectsTree(list || []);
       } catch (err: any) {
         console.error("Failed to load subjects", err);
         message.error(err?.response?.data?.error || "Failed to load subjects");
@@ -49,7 +74,29 @@ const Profile: React.FC<any> = () => {
       try {
         setLoadingIndustries(true);
         const res = (await api.get("/industries_for_follow")) as any;
-        setIndustries((Array.isArray(res) ? res : []) as Array<{ id: number; name: string }>);
+        console.debug('/industries_for_follow raw (settings):', res);
+        const raw = res;
+        const tree = raw?.tree ?? raw;
+        let list: any[] = [];
+        if (Array.isArray(tree)) list = tree;
+        else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
+        else if (Array.isArray(raw?.flat)) list = raw.flat;
+  const flatten = (nodes: any[]): any[] => {
+          const out: any[] = [];
+          const walk = (arr: any[]) => {
+            (arr || []).forEach((n) => {
+              if (!n) return;
+              if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+              else if (Array.isArray(n.children)) walk(n.children);
+            });
+          };
+          walk(nodes || []);
+          return out;
+        };
+  let leaves = flatten(list);
+  leaves = leaves.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
+  setIndustries(leaves as Array<{ id: number; name: string }>);
+  setIndustriesTree(list || []);
       } catch (err: any) {
         console.error("Failed to load industries", err);
         message.error(err?.response?.data?.error || "Failed to load industries");
@@ -82,10 +129,16 @@ const Profile: React.FC<any> = () => {
     const key = "follow-subjects-loading";
     message.loading({ content: "Updating subjects...", key });
     try {
-      await Promise.all([
-        ...toFollow.map((id) => api.post(`/subjects/${id}/follow`)),
-        ...toUnfollow.map((id) => api.post(`/subjects/${id}/unfollow`)),
-      ]);
+      const validToFollow = toFollow.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+      const validToUnfollow = toUnfollow.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+      if (validToFollow.length === 0 && validToUnfollow.length === 0) {
+        console.warn('No valid subject ids to follow/unfollow; dropped invalid ids', { toFollow, toUnfollow });
+      } else {
+        await Promise.all([
+          ...validToFollow.map((id) => api.post(`/subjects/${id}/follow`)),
+          ...validToUnfollow.map((id) => api.post(`/subjects/${id}/unfollow`)),
+        ]);
+      }
       if (toFollow.length) message.success(`Followed ${toFollow.length} subject(s)`, 2);
       if (toUnfollow.length) message.success(`Unfollowed ${toUnfollow.length} subject(s)`, 2);
       message.success({ content: "Subjects updated", key, duration: 1.5 });
@@ -112,10 +165,16 @@ const Profile: React.FC<any> = () => {
     const key = "follow-industries-loading";
     message.loading({ content: "Updating industries...", key });
     try {
-      await Promise.all([
-        ...toFollow.map((id) => api.post(`/industries/${id}/follow`)),
-        ...toUnfollow.map((id) => api.post(`/industries/${id}/unfollow`)),
-      ]);
+      const validToFollow = toFollow.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+      const validToUnfollow = toUnfollow.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+      if (validToFollow.length === 0 && validToUnfollow.length === 0) {
+        console.warn('No valid industry ids to follow/unfollow; dropped invalid ids', { toFollow, toUnfollow });
+      } else {
+        await Promise.all([
+          ...validToFollow.map((id) => api.post(`/industries/${id}/follow`)),
+          ...validToUnfollow.map((id) => api.post(`/industries/${id}/unfollow`)),
+        ]);
+      }
       if (toFollow.length) message.success(`Followed ${toFollow.length} industry/industries`, 2);
       if (toUnfollow.length) message.success(`Unfollowed ${toUnfollow.length} industry/industries`, 2);
       message.success({ content: "Industries updated", key, duration: 1.5 });
@@ -230,7 +289,9 @@ const Profile: React.FC<any> = () => {
             <Form layout="vertical">
               <Form.Item label="Follow Subjects" className="inter-normal">
                 <Spin spinning={loadingSubjects || submitting}>
-                  {subjects.length > 0 ? (
+                  {subjectsTree && subjectsTree.length > 0 ? (
+                    <FollowTree asDropdown={true} title="Subjects" placeholder="Search Subject" nodes={subjectsTree} checkedIds={selectedSubjectIds} onChange={(ids) => onSubjectsChange(ids)} />
+                  ) : subjects.length > 0 ? (
                     <Checkbox.Group
                       className="grid grid-cols-1 sm:grid-cols-2 gap-y-2"
                       value={selectedSubjectIds}
@@ -247,7 +308,9 @@ const Profile: React.FC<any> = () => {
 
               <Form.Item label="Follow Industries" name={"industry"}>
                 <Spin spinning={loadingIndustries || submitting}>
-                  {industries.length > 0 ? (
+                  {industriesTree && industriesTree.length > 0 ? (
+                    <FollowTree asDropdown={true} title="Industries" placeholder="Select Industry" nodes={industriesTree} checkedIds={selectedIndustryIds} onChange={(ids) => onIndustriesChange(ids)} />
+                  ) : industries.length > 0 ? (
                     <Checkbox.Group
                       className="grid grid-cols-1 sm:grid-cols-2 gap-y-2"
                       value={selectedIndustryIds}

@@ -14,7 +14,7 @@ import {
   ThreeDotsIcon,
   WarningIcon,
   Logo,
-  ShareIcon,
+  // ShareIcon,
 } from "../../../assets";
 import { Button, Modal } from "../../../components";
 import { Dropdown, Input, MenuProps, Space, message, Modal as AntModal, Select } from "antd";
@@ -25,6 +25,7 @@ import { getAvatar } from "../../../utils/helperFunction";
 import { maskUrl } from "../../../utils/urlMask";
 import { ShareButton } from "../../../components/share/ShareButton";
 import { ClientRequest } from "../../../requests";
+import CommentNode from '../../../components/comments/CommentNode';
 
 const { Option } = Select;
 
@@ -35,14 +36,7 @@ const HomePage: React.FC = () => {
   const [isExpanded, setIsExpanded] = useState(false); // Track if summary is expanded
   const maxWords = 100; // Maximum words for truncated summary
 
-  // Helper function to open share window
-  const openShareWindow = (url: string) => {
-    const w = 600;
-    const h = 500;
-    const y = window.top?.outerHeight ? Math.max((window.top!.outerHeight - h) / 2, 0) : 100;
-    const x = window.top?.outerWidth ? Math.max((window.top!.outerWidth - w) / 2, 0) : 100;
-    window.open(url, '_blank', `toolbar=1,location=1,status=1,menubar=0,scrollbars=1,resizable=1,width=${w},height=${h},left=${x},top=${y}`);
-  };
+  // (share window helper removed - unused)
 
   // Handle sharing to different platforms
   // Sharing is now handled by the ShareButton component
@@ -79,7 +73,7 @@ const HomePage: React.FC = () => {
   // payment disabled: remove related state
   const [posts, setPosts] = useState<any[]>([]);
   const [recentReads, setRecentReads] = useState<any[]>([]);
-  const [commentsByPost, setCommentsByPost] = useState<Record<number, { items: any[]; open: boolean; loading: boolean; newContent: string; submitting: boolean; visibleCount: number }>>({});
+  const [commentsByPost, setCommentsByPost] = useState<Record<number, { items: any[]; open: boolean; loading: boolean; newContent: string; submitting: boolean; visibleCount: number; replyFor?: Record<number, { open: boolean; content: string; submitting: boolean }> }>>({});
   // Track local shared state (idempotent per backend guide)
   const [sharedByPost, setSharedByPost] = useState<Record<number, boolean>>({});
 
@@ -114,8 +108,6 @@ const HomePage: React.FC = () => {
         return it;
       });
       setPosts((prev) => (reset ? (mapped || []) : [...prev, ...(mapped || [])]));
-      // Determine if there are more pages
-      // Normalize pagination checks: use explicit guards instead of nullish coalescing of boolean
       const pag = pagination as any;
       const hasNextFromFlag = typeof pag?.has_next === 'boolean' ? pag.has_next : undefined;
       const hasNextFromNextPage = (pag?.next_page != null) ? true : undefined;
@@ -247,6 +239,65 @@ const HomePage: React.FC = () => {
     }
   };
 
+  // Toggle reply input for a given comment
+  const toggleReplyInput = (postId: number, commentId: number) => {
+    setCommentsByPost((prev) => {
+      const cur = prev[postId] || { items: [], open: true, loading: false, newContent: "", submitting: false, visibleCount: 0 };
+  const replyFor = { ...(cur.replyFor || {}) } as Record<number, { open: boolean; content: string; submitting: boolean }>;
+  const curState = replyFor[commentId] || { open: false, content: "", submitting: false };
+  replyFor[commentId] = { open: !curState.open, content: curState.content || "", submitting: curState.submitting || false };
+  return { ...prev, [postId]: { ...cur, replyFor } } as any;
+    });
+  };
+
+  // Submit a reply to a specific comment
+  const submitReply = async (postId: number, parentId: number) => {
+    const replyState = commentsByPost[postId]?.replyFor?.[parentId];
+    const content = replyState?.content?.trim();
+    if (!content) return;
+    // mark submitting
+    setCommentsByPost((prev) => ({
+      ...prev,
+      [postId]: {
+        ...(prev[postId] || { items: [], open: true, loading: false, newContent: "", submitting: false, visibleCount: 0 }),
+  replyFor: { ...(prev[postId]?.replyFor || {}), [parentId]: { open: prev[postId]?.replyFor?.[parentId]?.open ?? true, content: prev[postId]?.replyFor?.[parentId]?.content ?? "", submitting: true } }
+      }
+    }));
+    try {
+      const res: any = await ClientRequest.addPostComment(postId, content, parentId);
+      // Insert reply into local tree
+      setCommentsByPost((prev) => {
+        const cur = prev[postId] || { items: [], open: true, loading: false, newContent: "", submitting: false, visibleCount: 0 };
+        const insertReply = (nodes: any[]): any[] => {
+          return nodes.map((n: any) => {
+            if (n.id === parentId) {
+              const nextReplies = Array.isArray(n.replies) ? [...n.replies, res?.comment] : [res?.comment];
+              return { ...n, replies: nextReplies };
+            }
+            if (n.replies && n.replies.length > 0) {
+              return { ...n, replies: insertReply(n.replies) };
+            }
+            return n;
+          });
+        };
+        const newItems = insertReply(cur.items || []);
+        return {
+          ...prev,
+          [postId]: {
+            ...cur,
+            items: newItems,
+            replyFor: { ...(cur.replyFor || {}), [parentId]: { open: false, content: "", submitting: false } }
+          }
+        } as any;
+      });
+      setPosts((prev) => prev.map((p: any) => p.id === postId ? { ...p, comment_count: (p.comment_count || 0) + 1 } : p));
+    } catch (e) {
+  setCommentsByPost((prev) => ({ ...prev, [postId]: { ...(prev[postId] as any), replyFor: { ...(prev[postId]?.replyFor || {}), [parentId]: { open: prev[postId]?.replyFor?.[parentId]?.open ?? false, content: prev[postId]?.replyFor?.[parentId]?.content ?? "", submitting: false } } } }));
+    }
+  };
+
+  // Using top-level memoized CommentNode component to prevent remounts and input focus loss
+
   // Sharing functionality is already defined above
 
   // Note: sharing is handled via shareTo() and the Dropdown menu
@@ -263,10 +314,12 @@ const HomePage: React.FC = () => {
         await loadPosts(true);
       } else {
         const err = res?.error ?? res?.data?.error ?? "Failed to repost";
-        message.error(err);
+        const text = typeof err === 'string' ? err : (err?.message ?? JSON.stringify(err) ?? String(err));
+        message.error(text);
       }
     } catch (e: any) {
-      message.error(e?.message || "Could not repost post");
+      const text = typeof e === 'string' ? e : (e?.message ?? JSON.stringify(e) ?? String(e));
+      message.error(text || "Could not repost post");
     }
   };
 
@@ -304,7 +357,8 @@ const HomePage: React.FC = () => {
       message.success("Post updated");
       setEditOpen(false);
     } catch (e: any) {
-      message.error(e?.message || "Could not update post");
+      const text = typeof e === 'string' ? e : (e?.message ?? JSON.stringify(e) ?? String(e));
+      message.error(text || "Could not update post");
     } finally {
       setEditLoading(false);
     }
@@ -322,7 +376,8 @@ const HomePage: React.FC = () => {
           setPosts((prev) => prev.filter((p) => p.id !== post.id));
           message.success("Post deleted");
         } catch (e: any) {
-          message.error(e?.message || "Could not delete post");
+          const text = typeof e === 'string' ? e : (e?.message ?? JSON.stringify(e) ?? String(e));
+          message.error(text || "Could not delete post");
         }
       },
     });
@@ -478,8 +533,8 @@ const HomePage: React.FC = () => {
         <meta name="twitter:image" content={`${window.location.origin}/logo.svg`} />
       </Helmet>
       <div className="flex lg:flex-row flex-col px-[10px] lg:px-[80px] gap-4 items-start pb-[20px] min-h-screen">
-        {/* First Section */}
-        <div className="order-1 hidden lg:flex w-full flex-[0.25] min-h-[300px] sm:min-h-[400px] bg-white rounded-lg border-[#B6B6B6] border flex-col items-center justify-center">
+  {/* First Section */}
+  <div className="order-1 hidden lg:flex w-full flex-[0.25] min-h-[300px] sm:min-h-[400px] bg-white rounded-lg border-[#B6B6B6] border flex-col items-center justify-center lg:sticky lg:top-[90px] lg:self-start lg:z-20">
           {/* Profile image */}
           <img
             src={getAvatar(String(user?.profile_image))}
@@ -565,32 +620,32 @@ const HomePage: React.FC = () => {
                       </p>
                     </div>
                   </div>
-                  <Dropdown
-                    menu={{
-                      items: [
-                        { label: <div onClick={() => openEdit(post)}>Edit</div>, key: "edit" },
-                        { label: <div onClick={() => handleDeleteConfirm(post)} className="text-red-600">Delete</div>, key: "delete" },
-                        { label: <div onClick={() => nav(URL.MESSAGING)}>Message</div>, key: "message" },
-                        {
-                          label: (
-                            <div
-                              className={`${sharedByPost[post.id] ? 'opacity-60 cursor-not-allowed' : ''}`}
-                              onClick={() => !sharedByPost[post.id] && handleRepost(post)}
-                            >
-                              {sharedByPost[post.id] ? 'Reposted' : 'Repost'}
-                            </div>
-                          ),
-                          key: "repost",
-                          disabled: !!sharedByPost[post.id],
-                        },
-                      ] as MenuProps['items'],
-                    }}
-                    trigger={["click"]}
-                  >
-                    <Space>
-                      <ThreeDotsIcon className="w-[40px]" />
-                    </Space>
-                  </Dropdown>
+                  {(() => {
+                    const ownerId = post?.author?.id ?? post?.user?.id ?? post?.owner?.id;
+                    const isOwner = ownerId != null && String(ownerId) === String(user?.id);
+                    const items: MenuProps['items'] = [
+                      ...(isOwner
+                        ? [
+                            { key: "edit", label: "Edit", onClick: () => openEdit(post) },
+                            { key: "delete", label: <span className="text-red-600">Delete</span>, onClick: () => handleDeleteConfirm(post) },
+                          ]
+                        : []),
+                      { key: "message", label: "Message", onClick: () => nav(URL.MESSAGING) },
+                      {
+                        key: "repost",
+                        label: sharedByPost[post.id] ? 'Reposted' : 'Repost',
+                        disabled: !!sharedByPost[post.id],
+                        onClick: () => !sharedByPost[post.id] && handleRepost(post),
+                      },
+                    ];
+                    return (
+                      <Dropdown menu={{ items }} trigger={["click"]}>
+                        <Space>
+                          <ThreeDotsIcon className="w-[40px]" />
+                        </Space>
+                      </Dropdown>
+                    );
+                  })()}
                 </div>
                 {/* Body */}
                 <div className="flex items-center my-[10px] border-[#F2F2F2] border-b pb-2">
@@ -752,10 +807,7 @@ const HomePage: React.FC = () => {
                         <p className="text-xs text-gray-500">Loading comments...</p>
                       ) : (
                         (commentsByPost[post.id]?.items || []).slice(0, commentsByPost[post.id]?.visibleCount || 0).map((c: any) => (
-                          <div key={c.id} className="bg-[#F9F9F9] p-2 rounded">
-                            <p className="text-[12px] text-[#581A57]">{c?.user?.full_name}</p>
-                            <p className="text-[12px]">{c?.content}</p>
-                          </div>
+                          <CommentNode key={c.id} postId={post.id} comment={c} commentsByPost={commentsByPost} setCommentsByPost={setCommentsByPost} toggleReplyInput={toggleReplyInput} submitReply={submitReply} />
                         ))
                       )}
                       {(!commentsByPost[post.id]?.loading && (commentsByPost[post.id]?.items || []).length === 0) && (
@@ -821,9 +873,9 @@ const HomePage: React.FC = () => {
           )}
         </div>
 
-        {/* Third Section */}
-        <div className="block md:block order-2 lg:order-3 w-full lg:w-fit sm:flex-[0.25] p-2 pt-0 rounded-lg bg-white relative">
-          <h2 className="text-[12px] leading-[28px] sm:text-[16px] font-inter border-[#F2F2F2] border-b pb-2 mb-2">
+  {/* Third Section */}
+  <div className="block md:block order-2 lg:order-3 w-full lg:w-fit sm:flex-[0.25] p-2 pt-0 rounded-lg bg-white relative lg:sticky lg:top-[90px] lg:self-start lg:z-10">
+          <h2 className="sticky top-[64px] lg:top-[90px] z-20 bg-white w-full text-[12px] leading-[28px] sm:text-[16px] font-inter border-[#F2F2F2] border-b pb-2 mb-2">
             Recently Read
           </h2>
           <div>
@@ -884,9 +936,9 @@ const HomePage: React.FC = () => {
             onChange={(v) => handleEditChange('subject', v)}
           >
             <Option value="enrolled">Enrolled</Option>
-            <Option value="Social Entrepreneurship and Innovation courses">
-              <span className="hidden sm:inline">Social Entrepreneurship and Innovation courses</span>
-              <span className="sm:hidden">Social Entrepreneurship and Innovation</span>
+            <Option value="Entrepreneurship and Innovation courses">
+              <span className="hidden sm:inline">Entrepreneurship and Innovation courses</span>
+              <span className="sm:hidden">Entrepreneurship and Innovation</span>
             </Option>
             <Option value="Learning Development courses">
               <span className="hidden sm:inline">Learning Development courses</span>

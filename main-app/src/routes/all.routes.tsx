@@ -9,6 +9,7 @@ import { URL } from "../utils/constants";
 import studentRoutes from "./students.routes";
 import adminRoutes from "./admin.routes";
 import instructorRoutes from "./instructor.routes";
+import VerifyEmail from "../pages/STUDENT/VerifyEmail";
 
 const allRoutes = [
     {
@@ -63,7 +64,12 @@ const allRoutes = [
         exact: true,
         userType: "instructor",
         children: [...instructorRoutes]
-    }
+    },
+    {
+        path: "/verify-email",
+        element: (<VerifyEmail />),
+        name: 'Verify Email',
+    },
 ]
 
 export default allRoutes;

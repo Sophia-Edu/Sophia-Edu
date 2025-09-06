@@ -9,6 +9,7 @@ import { countWords } from "../../../utils/helperFunction";
 import { ClientRequest } from "../../../requests";
 import api from "../../../Api";
 import { toast } from "react-toastify";
+import FollowTree from "../../../components/FollowTree";
 import { useNavigate } from "react-router-dom";
 import { URL } from "../../../utils/constants";
 
@@ -25,7 +26,9 @@ const Upload: React.FC<any> = () => {
   const nav = useNavigate();
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [subjects, setSubjects] = useState<Array<{ id: number; name: string }>>([]);
+  const [subjectsTree, setSubjectsTree] = useState<any[]>([]);
   const [industries, setIndustries] = useState<Array<{ id: number; name: string }>>([]);
+  const [industriesTree, setIndustriesTree] = useState<any[]>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [loadingIndustries, setLoadingIndustries] = useState(false);
 
@@ -35,7 +38,33 @@ const Upload: React.FC<any> = () => {
       try {
         setLoadingSubjects(true);
         const res = (await api.get("/subjects_for_follow")) as any;
-        if (active) setSubjects((Array.isArray(res) ? res : []) as Array<{ id: number; name: string }>);
+        console.debug('/subjects_for_follow raw (upload):', res);
+        if (!active) return;
+        const raw = res;
+        const tree = raw?.tree ?? raw;
+        let list: any[] = [];
+        if (Array.isArray(tree)) list = tree;
+        else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
+        else if (Array.isArray(raw?.flat)) list = raw.flat;
+        // flatten leaves to use in Select dropdowns (collect nodes with id)
+        const flatten = (nodes: any[]): any[] => {
+          const out: any[] = [];
+          const walk = (arr: any[]) => {
+            (arr || []).forEach((n) => {
+              if (!n) return;
+              if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+              else if (Array.isArray(n.children)) walk(n.children);
+            });
+          };
+          walk(nodes || []);
+          return out;
+        };
+    const leavesRaw = flatten(list);
+    const leaves = leavesRaw.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
+        if (active) {
+          setSubjects(leaves as Array<{ id: number; name: string }>);
+          setSubjectsTree(list || []);
+        }
       } catch (err: any) {
         console.error("Failed to load subjects", err);
         message.error(err?.response?.data?.error || "Failed to load subjects");
@@ -45,7 +74,32 @@ const Upload: React.FC<any> = () => {
       try {
         setLoadingIndustries(true);
         const res = (await api.get("/industries_for_follow")) as any;
-        if (active) setIndustries((Array.isArray(res) ? res : []) as Array<{ id: number; name: string }>);
+        console.debug('/industries_for_follow raw (upload):', res);
+        if (!active) return;
+        const raw = res;
+        const tree = raw?.tree ?? raw;
+        let list: any[] = [];
+        if (Array.isArray(tree)) list = tree;
+        else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
+        else if (Array.isArray(raw?.flat)) list = raw.flat;
+        const flatten = (nodes: any[]): any[] => {
+          const out: any[] = [];
+          const walk = (arr: any[]) => {
+            (arr || []).forEach((n) => {
+              if (!n) return;
+              if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+              else if (Array.isArray(n.children)) walk(n.children);
+            });
+          };
+          walk(nodes || []);
+          return out;
+        };
+    const leavesRaw = flatten(list);
+    const leaves = leavesRaw.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
+        if (active) {
+          setIndustries(leaves as Array<{ id: number; name: string }>);
+          setIndustriesTree(list || []);
+        }
       } catch (err: any) {
         console.error("Failed to load industries", err);
         message.error(err?.response?.data?.error || "Failed to load industries");
@@ -127,7 +181,7 @@ const Upload: React.FC<any> = () => {
         <h2 className="text-[24px] sm:text-center my-[20px] font-semibold">
           Enterprise Project
         </h2>
-        <p className="text-[16px] mb-[20px] text-center sm:text-left sm:pl-[33%]">
+        <p className="text-[16px] mb-[20px] writeup">
           Upload your enterprise project here. This may include some or all of the following: business plan or pitch deck that explains the business idea of your project, DOI of research work supporting your project, website or video link explaining your project. We strongly advise that you patent your idea/inventions where possible before you upload or post them to Sophia. By continuing to upload your work/manuscript for review and also by using this site, you agree that Sophia does not have any liability for your work or intellectual property in the case of theft.
         </p>
 
@@ -197,87 +251,77 @@ const Upload: React.FC<any> = () => {
             <Input className="p-2 mt-[-10px] mb-[20px]" placeholder="Video Link" />
           </Form.Item>
           <Form.Item label="Subject(s) and industries your project belongs" name={"subject"}>
-            <Select
-              placeholder="Search Subject"
-              className="w-full bg-white h-[38px] rounded-sm"
-              onChange={handleSubjectSelectChange}
-              showSearch
-              placement="bottomLeft"
-              getPopupContainer={() => document.body}
-              dropdownAlign={{ overflow: { adjustY: false } } as any}
-              listHeight={240}
-              loading={loadingSubjects}
-              optionFilterProp="title"
-              optionLabelProp="title"
-              notFoundContent="No subjects available"
-            >
-              {subjects.map((s) => (
-                <Select.Option key={s.id} value={s.id} title={s.name}>
-                  <div>
-                    <div>{s.name}</div>
-                    {Object.keys(s).filter((k) => k !== "id" && k !== "name").length > 0 && (
-                      <div className="text-[#666666] text-sm mt-1">
-                        {Object.keys(s)
-                          .filter((k) => k !== "id" && k !== "name")
-                          .map((k) => (
-                            <div key={k}><strong>{k}:</strong> {String((s as any)[k])}</div>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                </Select.Option>
-              ))}
-            </Select>
+            {subjectsTree && subjectsTree.length > 0 ? (
+              <FollowTree asDropdown={true} title="Subjects" placeholder="Search Subject" nodes={subjectsTree} checkedIds={selectedSubjectId != null ? [selectedSubjectId] : []} onChange={(ids) => handleSubjectSelectChange(ids && ids.length ? ids[0] : null)} />
+            ) : (
+              <Select
+                placeholder="Search Subject"
+                className="w-full bg-white h-[38px] rounded-sm"
+                onChange={handleSubjectSelectChange}
+                showSearch
+                placement="bottomLeft"
+                getPopupContainer={() => document.body}
+                dropdownAlign={{ overflow: { adjustY: false } } as any}
+                listHeight={240}
+                loading={loadingSubjects}
+                optionFilterProp="title"
+                optionLabelProp="title"
+                notFoundContent="No subjects available"
+              >
+                {subjects.map((s) => (
+                  <Select.Option key={s.id} value={s.id} title={s.name}>
+                    <div>
+                      <div>{s.name}</div>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select>
+            )}
             {/* Guidance: show metadata for the selected subject */}
             <div id="subject-guidance" className="text-sm text-[#666666] mt-2" aria-live="polite">
               {selectedSubjectId != null && (() => {
                 const meta = subjects.find((x) => x.id === selectedSubjectId);
                 if (!meta) return null;
-                const extraKeys = Object.keys(meta).filter((k) => k !== "id" && k !== "name");
+                const extraKeys = Object.keys(meta).filter((k) => k !== "id" && k !== "name" && k !== "selectable");
                 if (!extraKeys.length) return null;
                 return extraKeys.map((k) => (<div key={k}><strong>{k}:</strong> {String((meta as any)[k])}</div>));
               })()}
             </div>
           </Form.Item>
           <Form.Item label="Industry" name={"industry"}>
-            <Select
-              id="industry-select"
-              placeholder="Select Industry"
-              className="w-full bg-white h-[38px] rounded-sm"
-              onChange={handleIndustrySelectChange}
-              showSearch
-              placement="bottomLeft"
-              getPopupContainer={() => document.body}
-              dropdownAlign={{ overflow: { adjustY: false } } as any}
-              listHeight={240}
-              loading={loadingIndustries}
-              optionFilterProp="title"
-              optionLabelProp="title"
-              notFoundContent="No industries available"
-            >
-              {industries.map((i) => (
-                <Select.Option key={i.id} value={i.id} title={i.name}>
-                  <div>
-                    <div>{i.name}</div>
-                    {Object.keys(i).filter((k) => k !== "id" && k !== "name").length > 0 && (
-                      <div className="text-[#666666] text-sm mt-1">
-                        {Object.keys(i)
-                          .filter((k) => k !== "id" && k !== "name")
-                          .map((k) => (
-                            <div key={k}><strong>{k}:</strong> {String((i as any)[k])}</div>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                </Select.Option>
-              ))}
-            </Select>
+            {industriesTree && industriesTree.length > 0 ? (
+              <FollowTree asDropdown={true} title="Industries" placeholder="Select Industry" nodes={industriesTree} checkedIds={selectedIndustryId != null ? [selectedIndustryId] : []} onChange={(ids) => handleIndustrySelectChange(ids && ids.length ? ids[0] : null)} />
+            ) : (
+              <Select
+                id="industry-select"
+                placeholder="Select Industry"
+                className="w-full bg-white h-[38px] rounded-sm"
+                onChange={handleIndustrySelectChange}
+                showSearch
+                placement="bottomLeft"
+                getPopupContainer={() => document.body}
+                dropdownAlign={{ overflow: { adjustY: false } } as any}
+                listHeight={240}
+                loading={loadingIndustries}
+                optionFilterProp="title"
+                optionLabelProp="title"
+                notFoundContent="No industries available"
+              >
+                {industries.map((i) => (
+                  <Select.Option key={i.id} value={i.id} title={i.name}>
+                    <div>
+                      <div>{i.name}</div>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select>
+            )}
             {/* Guidance: show metadata for the selected industry */}
             <div id="industry-guidance" className="text-sm text-[#666666] mt-2" aria-live="polite">
               {selectedIndustryId != null && (() => {
                 const meta = industries.find((x) => x.id === selectedIndustryId);
                 if (!meta) return null;
-                const extraKeys = Object.keys(meta).filter((k) => k !== "id" && k !== "name");
+                const extraKeys = Object.keys(meta).filter((k) => k !== "id" && k !== "name" && k !== "selectable");
                 if (!extraKeys.length) return null;
                 return extraKeys.map((k) => (<div key={k}><strong>{k}:</strong> {String((meta as any)[k])}</div>));
               })()}

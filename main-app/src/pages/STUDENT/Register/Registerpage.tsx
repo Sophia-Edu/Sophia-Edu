@@ -33,13 +33,11 @@ const Registerpage: React.FC<any> = () => {
 	const onFinish: FormProps<FieldType>["onFinish"] = async (values: any) => {
 		setLoading(true);
 		try {
-			const res = await AuthRequest.register(values); // Assuming AuthRequest returns a promise
-			console.log(res); // Log response if needed
-			onSuccess("Registration successful!"); // Trigger success alert
-			nav(URL.LOGIN);
+			await AuthRequest.register(values);
+			onSuccess("Registration successful! Please check your email to verify your account before logging in.");
 		} catch (error: any) {
 			console.error("Registration error:", error);
-			AlertFailure(error.message); // Trigger failure alert
+			AlertFailure(error.message);
 		} finally {
 			setLoading(false);
 		}
@@ -61,12 +59,11 @@ const Registerpage: React.FC<any> = () => {
 				password: tokenData.sub,
 				confirm_password: tokenData.sub,
 			};
-			await AuthRequest.register(payload); // Assuming AuthRequest returns a promise
-			onSuccess("Registration successful!"); // Trigger success alert
-			nav(URL.LOGIN);
+			await AuthRequest.register(payload);
+			onSuccess("Registration successful! Please check your email to verify your account before logging in.");
 		} catch (error: any) {
 			console.error("Login error:", error);
-			AlertFailure(error.message); // Trigger failure alert
+			AlertFailure(error.message);
 		}
 	};
 	return (

@@ -17,15 +17,8 @@ const Forgotpage: React.FC<any> = () => {
     const onFinish = async (values: { email: string }) => {
         try {
             setLoading(true);
-            const res = await authRequests.forgotPassword({ email: values.email });
-            // In dev, backend returns token; include it if available for quick testing
-            const { message, token } = (res as any) || {};
-            const msg = message || "Password reset token created";
-            onSuccess(msg);
-            if (token) {
-                // Auto-redirect to reset password page with token for quick testing
-                nav(`${URL.RESET_PASSWORD}?token=${encodeURIComponent(token)}`);
-            }
+            await authRequests.forgotPassword({ email: values.email });
+            onSuccess("If this email exists, a password reset link has been sent to your inbox.");
         } catch (e: any) {
             onFailure(e?.message || "Failed to request password reset");
         } finally {

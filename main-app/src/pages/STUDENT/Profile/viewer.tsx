@@ -4,7 +4,7 @@ import { AddressLocator, profileBG } from "../../../assets";
 import { Avatar, Spin } from "antd";
 import { useParams } from "react-router-dom";
 import { ClientRequest } from "../../../requests";
-import { UserProps, useAlert } from "../../../store";
+import { UserProps, useAlert, useUser } from "../../../store";
 import { getAvatar } from "../../../utils/helperFunction";
 
 const ReadOnlyProfile: React.FC = () => {
@@ -38,6 +38,10 @@ const ReadOnlyProfile: React.FC = () => {
   }, [id, onFailure]);
 
   const display = data;
+  const currentUser = useUser((s) => s.user);
+  // Determine if the current route is viewing another user's profile.
+  // If `id` param exists and doesn't match the logged in user's id, treat as viewing someone else.
+  const viewingOther = Boolean(id && currentUser && String((currentUser as any)?.id) !== String(id));
 
   return (
     <Layout loading={loading}>
@@ -68,7 +72,7 @@ const ReadOnlyProfile: React.FC = () => {
                     {display?.email && (
                       <span className="text-[14px] text-[#666666] block">{display.email}</span>
                     )}
-                    {display?.phone_number && (
+                    {!viewingOther && display?.phone_number && (
                       <a
                         href={`tel:${display.phone_number}`}
                         className="text-[14px] text-[#666666] block"
@@ -92,12 +96,12 @@ const ReadOnlyProfile: React.FC = () => {
             </div>
 
             {/* Contact info */}
-            {(display?.email || (display && Object.prototype.hasOwnProperty.call(display, 'phone_number'))) && (
+            {(display?.email || (display && Object.prototype.hasOwnProperty.call(display, 'phone_number') && !viewingOther)) && (
               <section className="my-[20px]">
                 <h3 className="mb-[10px] text-[20px] font-semibold">Contact info</h3>
                 <div className="text-[#666666] text-[16px] flex flex-col gap-1">
                   {display?.email && <div><span className="text-[#121212] font-medium">Email:</span> {display.email}</div>}
-                  {display && Object.prototype.hasOwnProperty.call(display, 'phone_number') && (
+                  {display && Object.prototype.hasOwnProperty.call(display, 'phone_number') && !viewingOther && (
                     <div>
                       <span className="text-[#121212] font-medium">Phone:</span>{' '}
                       {display?.phone_number ? (

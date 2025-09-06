@@ -762,9 +762,11 @@ class ClientRequests {
     }
 
     // Comments
-    addPostComment = async (post_id: number | string, content: string) => {
+    addPostComment = async (post_id: number | string, content: string, parent_id?: number | null) => {
         try {
-            const res: any = await api.post(`/user/posts/${post_id}/comments`, { content });
+            const body: any = { content };
+            if (parent_id != null) body.parent_id = parent_id;
+            const res: any = await api.post(`/user/posts/${post_id}/comments`, body);
             return res; // { message, comment }
         } catch (error: any) {
             console.log(error);

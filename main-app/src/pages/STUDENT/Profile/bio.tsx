@@ -21,6 +21,7 @@ import { ClientRequest } from "../../../requests";
 import { getAvatar } from "../../../utils/helperFunction";
 import axios from "axios";
 import api from "../../../Api";
+import FollowTree from "../../../components/FollowTree";
 import { removeStoredAuthToken } from "../../../utils/storage";
 import authRequests from "../../../requests/auth.request";
 import { useParams } from "react-router-dom";
@@ -89,9 +90,11 @@ const Profile: React.FC<any> = () => {
 	const [_profile, setProfile] = useState<UserProps | null>(initialProfileValues);
 	const fileInputRef: any = useRef(null);
 	const coverFileInputRef: any = useRef(null);
-  // Follow Subjects/Industries state and loading
-  const [subjects, setSubjects] = useState<any[]>([]);
+	// Follow Subjects/Industries state and loading
+	const [subjects, setSubjects] = useState<any[]>([]);
+	const [subjectsTree, setSubjectsTree] = useState<any[]>([]);
   const [industries, setIndustries] = useState<any[]>([]);
+	const [industriesTree, setIndustriesTree] = useState<any[]>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [loadingIndustries, setLoadingIndustries] = useState(false);
   const [submittingFollow, setSubmittingFollow] = useState(false);
@@ -142,42 +145,169 @@ const Profile: React.FC<any> = () => {
     } catch {}
   }, []);
 
+	const reloadLists = async () => {
+		let active = true;
+		try {
+			setLoadingSubjects(true);
+			const res: any = await api.get("/subjects_for_follow");
+			const raw = res;
+			const tree = raw?.tree ?? raw;
+			let list: any[] = [];
+			if (Array.isArray(tree)) list = tree;
+			else if (tree && typeof tree === "object" && tree.id != null) list = [tree];
+			else if (Array.isArray(raw?.flat)) list = raw.flat;
+			const flatten = (nodes: any[]): any[] => {
+				const out: any[] = [];
+				const walk = (arr: any[]) => {
+					(arr || []).forEach((n) => {
+						if (!n) return;
+						if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+						else if (Array.isArray(n.children)) walk(n.children);
+					});
+				};
+				walk(nodes || []);
+				return out;
+			};
+								let leaves = flatten(list);
+								// strip internal flags from leaves before storing
+								leaves = leaves.map((l: any) => {
+									if (!l || typeof l !== 'object') return l;
+									const copy = { ...l };
+									delete copy.selectable;
+									return copy;
+								});
+								if (active) {
+									setSubjects(leaves);
+									setSubjectsTree(list || []);
+									const map: Record<number, any> = {};
+									leaves.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
+									setSubjectMetaMap(map);
+								}
+		} catch (err) {
+			console.error(err);
+		} finally {
+			setLoadingSubjects(false);
+		}
+
+		try {
+			setLoadingIndustries(true);
+			const res: any = await api.get("/industries_for_follow");
+			const raw = res;
+			const tree = raw?.tree ?? raw;
+			let list: any[] = [];
+			if (Array.isArray(tree)) list = tree;
+			else if (tree && typeof tree === "object" && tree.id != null) list = [tree];
+			else if (Array.isArray(raw?.flat)) list = raw.flat;
+			const flatten = (nodes: any[]): any[] => {
+				const out: any[] = [];
+				const walk = (arr: any[]) => {
+					(arr || []).forEach((n) => {
+						if (!n) return;
+						if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+						else if (Array.isArray(n.children)) walk(n.children);
+					});
+				};
+				walk(nodes || []);
+				return out;
+			};
+			const leaves = flatten(list);
+			if (active) {
+				setIndustries(leaves);
+				setIndustriesTree(list || []);
+				const map: Record<number, any> = {};
+				leaves.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
+				setIndustryMetaMap(map);
+			}
+		} catch (err) {
+			console.error(err);
+		} finally {
+			setLoadingIndustries(false);
+		}
+		return () => { active = false; };
+	};
+
   // Load lists for follow options (store full objects in maps for guidance display)
   useEffect(() => {
     let active = true;
     (async () => {
-      try {
-        setLoadingSubjects(true);
-        const res = (await api.get("/subjects_for_follow")) as any;
-        if (active) {
-          const list = Array.isArray(res) ? res : [];
-          setSubjects(list);
-          const map: Record<number, any> = {};
-          list.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
-          setSubjectMetaMap(map);
-        }
-      } catch (err: any) {
-        console.error("Failed to load subjects", err);
-        message.error(err?.response?.data?.error || "Failed to load subjects");
-      } finally {
-        setLoadingSubjects(false);
-      }
-      try {
-        setLoadingIndustries(true);
-        const res = (await api.get("/industries_for_follow")) as any;
-        if (active) {
-          const list = Array.isArray(res) ? res : [];
-          setIndustries(list);
-          const map: Record<number, any> = {};
-          list.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
-          setIndustryMetaMap(map);
-        }
-      } catch (err: any) {
-        console.error("Failed to load industries", err);
-        message.error(err?.response?.data?.error || "Failed to load industries");
-      } finally {
-        setLoadingIndustries(false);
-      }
+			try {
+				setLoadingSubjects(true);
+				const res = (await api.get("/subjects_for_follow")) as any;
+				console.debug('/subjects_for_follow raw (bio):', res);
+				if (active) {
+								const raw = res;
+								const tree = raw?.tree ?? raw;
+								let list: any[] = [];
+								if (Array.isArray(tree)) list = tree;
+								else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
+								else if (Array.isArray(raw?.flat)) list = raw.flat;
+								const flatten = (nodes: any[]): any[] => {
+									const out: any[] = [];
+									const walk = (arr: any[]) => {
+										(arr || []).forEach((n) => {
+											if (!n) return;
+											if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+											else if (Array.isArray(n.children)) walk(n.children);
+										});
+									};
+									walk(nodes || []);
+									return out;
+								};
+								const leaves = flatten(list);
+								setSubjects(leaves);
+								setSubjectsTree(list || []);
+								const map: Record<number, any> = {};
+								leaves.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
+								setSubjectMetaMap(map);
+				}
+			} catch (err: any) {
+				console.error("Failed to load subjects", err);
+				message.error(err?.response?.data?.error || "Failed to load subjects");
+			} finally {
+				setLoadingSubjects(false);
+			}
+			try {
+				setLoadingIndustries(true);
+				const res = (await api.get("/industries_for_follow")) as any;
+				console.debug('/industries_for_follow raw (bio):', res);
+				if (active) {
+								const raw = res;
+								const tree = raw?.tree ?? raw;
+								let list: any[] = [];
+								if (Array.isArray(tree)) list = tree;
+								else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
+								else if (Array.isArray(raw?.flat)) list = raw.flat;
+								const flatten = (nodes: any[]): any[] => {
+									const out: any[] = [];
+									const walk = (arr: any[]) => {
+										(arr || []).forEach((n) => {
+											if (!n) return;
+											if (n.selectable === true || (n.id != null && !Array.isArray(n.children))) out.push(n);
+											else if (Array.isArray(n.children)) walk(n.children);
+										});
+									};
+									walk(nodes || []);
+									return out;
+								};
+												let leaves = flatten(list);
+												leaves = leaves.map((l: any) => {
+													if (!l || typeof l !== 'object') return l;
+													const copy = { ...l };
+													delete copy.selectable;
+													return copy;
+												});
+												setIndustries(leaves);
+												setIndustriesTree(list || []);
+												const map: Record<number, any> = {};
+												leaves.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
+												setIndustryMetaMap(map);
+				}
+			} catch (err: any) {
+				console.error("Failed to load industries", err);
+				message.error(err?.response?.data?.error || "Failed to load industries");
+			} finally {
+				setLoadingIndustries(false);
+			}
     })();
     return () => { active = false; };
   }, []);
@@ -193,19 +323,44 @@ const Profile: React.FC<any> = () => {
     setSubmittingFollow(true);
     const key = "bio-follow-subjects";
     message.loading({ content: "Updating subjects...", key });
-    try {
-      await Promise.all([
-        ...toFollow.map((id) => api.post(`/subjects/${id}/follow`)),
-        ...toUnfollow.map((id) => api.post(`/subjects/${id}/unfollow`)),
-      ]);
-      message.success({ content: "Subjects updated", key, duration: 1.5 });
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.response?.data?.error || "Failed to update subjects";
-      console.error("Subjects update failed", err);
-      message.error({ content: msg, key });
-    } finally {
-      setSubmittingFollow(false);
-    }
+			try {
+				// Filter out invalid ids (null/undefined/NaN) to avoid requests like /subjects/null/follow
+				const validToFollow = toFollow.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+				const validToUnfollow = toUnfollow.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+				if (validToFollow.length === 0 && validToUnfollow.length === 0) {
+					console.warn('No valid subject ids to follow/unfollow; dropped invalid ids', { toFollow, toUnfollow });
+					message.success({ content: 'Subjects updated', key, duration: 1.5 });
+					return;
+				}
+				// Use allSettled so a 404 for one id won't abort the whole batch.
+				const actions = [
+					...validToFollow.map((id) => api.post(`/subjects/${id}/follow`)),
+					...validToUnfollow.map((id) => api.post(`/subjects/${id}/unfollow`)),
+				];
+				const results = await Promise.allSettled(actions);
+			const errors: any[] = [];
+			results.forEach((r) => {
+				if (r.status === 'rejected') {
+					const err = r.reason;
+					// Treat 404 as non-fatal (item not found) and skip
+					if (err?.response?.status === 404) return;
+					errors.push(err);
+				}
+			});
+				if (errors.length) {
+					const msg = errors[0]?.response?.data?.message || errors[0]?.response?.data?.error || 'Some updates failed';
+					console.error('Subjects update partial failures', errors);
+					message.error({ content: msg, key });
+				} else {
+					message.success({ content: 'Subjects updated', key, duration: 1.5 });
+				}
+		} catch (err: any) {
+			console.error('Subjects update failed', err);
+			const msg = err?.response?.data?.message || err?.response?.data?.error || 'Failed to update subjects';
+			message.error({ content: msg, key });
+		} finally {
+			setSubmittingFollow(false);
+		}
   };
 
   const onIndustriesFollowChange = async (newIds: number[]) => {
@@ -219,19 +374,34 @@ const Profile: React.FC<any> = () => {
     setSubmittingFollow(true);
     const key = "bio-follow-industries";
     message.loading({ content: "Updating industries...", key });
-    try {
-      await Promise.all([
-        ...toFollow.map((id) => api.post(`/industries/${id}/follow`)),
-        ...toUnfollow.map((id) => api.post(`/industries/${id}/unfollow`)),
-      ]);
-      message.success({ content: "Industries updated", key, duration: 1.5 });
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.response?.data?.error || "Failed to update industries";
-      console.error("Industries update failed", err);
-      message.error({ content: msg, key });
-    } finally {
-      setSubmittingFollow(false);
-    }
+		try {
+			const actions = [
+				...toFollow.map((id) => api.post(`/industries/${id}/follow`)),
+				...toUnfollow.map((id) => api.post(`/industries/${id}/unfollow`)),
+			];
+			const results = await Promise.allSettled(actions);
+			const errors: any[] = [];
+			results.forEach((r) => {
+				if (r.status === 'rejected') {
+					const err = r.reason;
+					if (err?.response?.status === 404) return; // ignore not-found
+					errors.push(err);
+				}
+			});
+			if (errors.length) {
+				const msg = errors[0]?.response?.data?.message || errors[0]?.response?.data?.error || 'Some updates failed';
+				console.error('Industries update partial failures', errors);
+				message.error({ content: msg, key });
+			} else {
+				message.success({ content: 'Industries updated', key, duration: 1.5 });
+			}
+		} catch (err: any) {
+			console.error('Industries update failed', err);
+			const msg = err?.response?.data?.message || err?.response?.data?.error || 'Failed to update industries';
+			message.error({ content: msg, key });
+		} finally {
+			setSubmittingFollow(false);
+		}
   };
 
 	const handleActiveToggle = async (checked: boolean) => {
@@ -1243,36 +1413,44 @@ const Profile: React.FC<any> = () => {
 							<div className="w-full sm:w-1/2">
 								<Form.Item label="Subjects" className="inter-normal">
 									<Spin spinning={loadingSubjects || submittingFollow}>
-										<Select
-											mode="multiple"
-											allowClear
-											showSearch
-											placeholder="Search Subject"
-											className="w-full"
-											value={selectedSubjectIds}
-											onChange={(vals) => onSubjectsFollowChange(vals as number[])}
-											optionLabelProp="title"
-											optionFilterProp="title"
-											notFoundContent="No subjects available"
-										>
-											{subjects.map((s: any) => (
-												<Select.Option key={s.id} value={s.id} title={s.name}>
-													<div>
-														<div>{s.name}</div>
-														{/* show additional metadata inside dropdown only (not in selected label) */}
-														{Object.keys(s).filter((k) => k !== "id" && k !== "name").length > 0 && (
-															<div className="text-[#666666] text-sm mt-1">
-																{Object.keys(s)
-																	.filter((k) => k !== "id" && k !== "name")
-																	.map((k) => (
-																		<div key={k}><strong>{k}:</strong> {String((s as any)[k])}</div>
-																	))}
-															</div>
-														)}
-													</div>
-												</Select.Option>
-											))}
-										</Select>
+										{subjectsTree && subjectsTree.length > 0 ? (
+											<FollowTree asDropdown={true} title="Subjects" placeholder="Search Subject" nodes={subjectsTree} checkedIds={selectedSubjectIds} onChange={(ids) => onSubjectsFollowChange(ids)} />
+										) : subjects.length > 0 ? (
+											<Select
+												mode="multiple"
+												allowClear
+												showSearch
+												placeholder="Search Subject"
+												className="w-full"
+												value={selectedSubjectIds}
+												onChange={(vals) => onSubjectsFollowChange(vals as number[])}
+												optionLabelProp="title"
+												optionFilterProp="title"
+												notFoundContent="No subjects available"
+											>
+												{subjects.map((s: any) => (
+													<Select.Option key={s.id} value={s.id} title={s.name}>
+														<div>
+															<div>{s.name}</div>
+															{Object.keys(s).filter((k) => k !== "id" && k !== "name" && k !== "selectable").length > 0 && (
+																<div className="text-[#666666] text-sm mt-1">
+																	{Object.keys(s)
+																		.filter((k) => k !== "id" && k !== "name" && k !== "selectable")
+																		.map((k) => (
+																			<div key={k}><strong>{k}:</strong> {String((s as any)[k])}</div>
+																		))}
+																</div>
+															)}
+														</div>
+													</Select.Option>
+												))}
+												</Select>
+										) : (
+												<div className="text-sm text-gray-500">
+													No subjects available. <button type="button" className="underline text-blue-600" onClick={reloadLists}>Reload</button>
+												</div>
+											)
+										}
 									</Spin>
 									{/* Guidance: show metadata for the most recently selected subject (visible label stays as name) */}
 									{selectedSubjectIds && selectedSubjectIds.length > 0 && (() => {
@@ -1282,6 +1460,8 @@ const Profile: React.FC<any> = () => {
 										const extra: Record<string, any> = { ...meta };
 										delete extra.id;
 										delete extra.name;
+										// hide internal flags from UI
+										delete extra.selectable;
 										const keys = Object.keys(extra);
 										if (!keys.length) return null;
 										return (
@@ -1296,36 +1476,44 @@ const Profile: React.FC<any> = () => {
 
 								<Form.Item label="Industry" className="inter-normal">
 									<Spin spinning={loadingIndustries || submittingFollow}>
-										<Select
-											mode="multiple"
-											allowClear
-											showSearch
-											placeholder="Select Industry"
-											className="w-full"
-											value={selectedIndustryIds}
-											onChange={(vals) => onIndustriesFollowChange(vals as number[])}
-											optionLabelProp="title"
-											optionFilterProp="title"
-											notFoundContent="No industries available"
-										>
-											{industries.map((i: any) => (
-												<Select.Option key={i.id} value={i.id} title={i.name}>
-													<div>
-														<div>{i.name}</div>
-														{Object.keys(i).filter((k) => k !== "id" && k !== "name").length > 0 && (
-											<div className="text-[#666666] text-sm mt-1">
-												{Object.keys(i)
-													.filter((k) => k !== "id" && k !== "name")
-													.map((k) => (
-														<div key={k}><strong>{k}:</strong> {String((i as any)[k])}</div>
-													))}
+										{industriesTree && industriesTree.length > 0 ? (
+											<FollowTree asDropdown={true} title="Industries" placeholder="Select Industry" nodes={industriesTree} checkedIds={selectedIndustryIds} onChange={(ids) => onIndustriesFollowChange(ids)} />
+										) : industries.length > 0 ? (
+											<Select
+												mode="multiple"
+												allowClear
+												showSearch
+												placeholder="Select Industry"
+												className="w-full"
+												value={selectedIndustryIds}
+												onChange={(vals) => onIndustriesFollowChange(vals as number[])}
+												optionLabelProp="title"
+												optionFilterProp="title"
+												notFoundContent="No industries available"
+											>
+												{industries.map((i: any) => (
+													<Select.Option key={i.id} value={i.id} title={i.name}>
+														<div>
+															<div>{i.name}</div>
+															{Object.keys(i).filter((k) => k !== "id" && k !== "name" && k !== "selectable").length > 0 && (
+																<div className="text-[#666666] text-sm mt-1">
+																	{Object.keys(i)
+																		.filter((k) => k !== "id" && k !== "name" && k !== "selectable")
+																		.map((k) => (
+																			<div key={k}><strong>{k}:</strong> {String((i as any)[k])}</div>
+																		))}
+																</div>
+															)}
+														</div>
+													</Select.Option>
+												))}
+											</Select>
+										) : (
+											<div className="text-sm text-gray-500">
+												No industries available. <button type="button" className="underline text-blue-600" onClick={reloadLists}>Reload</button>
 											</div>
 										)}
-									</div>
-								</Select.Option>
-							))}
-						</Select>
-					</Spin>
+									</Spin>
 									{/* Guidance: show metadata for the most recently selected industry */}
 									{selectedIndustryIds && selectedIndustryIds.length > 0 && (() => {
 										const lastId = selectedIndustryIds[selectedIndustryIds.length - 1];
@@ -1334,6 +1522,8 @@ const Profile: React.FC<any> = () => {
 										const extra: Record<string, any> = { ...meta };
 										delete extra.id;
 										delete extra.name;
+										// hide internal flags from UI
+										delete extra.selectable;
 										const keys = Object.keys(extra);
 										if (!keys.length) return null;
 										return (
@@ -1345,6 +1535,7 @@ const Profile: React.FC<any> = () => {
 										);
 									})()}
 								</Form.Item>
+
 							</div>
 						</div>
 

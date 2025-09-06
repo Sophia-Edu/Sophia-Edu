@@ -141,6 +141,20 @@ class AuthRequests {
             throw new Error(errorMessage);
         }
     };
+
+    verifyEmail = async (data: { token: string }) => {
+        try {
+            const response = await api.post(`/verify-email`, data);
+            return response;
+        } catch (error: any) {
+            console.log(error.response?.data);
+            const errorMessage =
+                error.response?.data?.error ||
+                error.response?.data?.message ||
+                "Verification failed";
+            throw new Error(errorMessage);
+        }
+    };
 }
 
 const authRequests = new AuthRequests();

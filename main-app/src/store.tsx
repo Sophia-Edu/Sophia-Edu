@@ -4,6 +4,7 @@ import {persist} from "zustand/middleware";
 
 export interface UserProps {
     full_name: string;
+    id?: number | string;
     email: string;
     password: string;
     phone_number?: string;

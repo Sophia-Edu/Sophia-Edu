@@ -45,6 +45,32 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response: any) => {
         // console.log("response received");
+        // remove course category metadata from subjects_for_follow responses
+        try {
+            const url = String(response?.config?.url || "");
+            if (url.includes("/subjects_for_follow")) {
+                const d = response?.data;
+                if (Array.isArray(d)) {
+                    response.data = d.map((item: any) => {
+                        if (item && typeof item === "object") {
+                            const copy = { ...item };
+                            delete (copy as any).course_category;
+                            delete (copy as any).courseCategory;
+                            return copy;
+                        }
+                        return item;
+                    });
+                } else if (d && typeof d === "object") {
+                    const copy = { ...d };
+                    delete (copy as any).course_category;
+                    delete (copy as any).courseCategory;
+                    response.data = copy;
+                }
+            }
+        } catch (e) {
+            // non-fatal: if sanitizer fails, allow original response through
+            // console.warn('subjects_for_follow sanitizer error', e);
+        }
         if (response?.data?.token) {
             // console.log(getStoredAuthToken());
         }
