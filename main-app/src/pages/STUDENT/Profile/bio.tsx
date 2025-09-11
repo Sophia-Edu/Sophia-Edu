@@ -140,8 +140,18 @@ const Profile: React.FC<any> = () => {
     try {
       const savedSubjects = localStorage.getItem("followed_subject_ids");
       const savedIndustries = localStorage.getItem("followed_industry_ids");
-      if (savedSubjects) setSelectedSubjectIds(JSON.parse(savedSubjects));
-      if (savedIndustries) setSelectedIndustryIds(JSON.parse(savedIndustries));
+      if (savedSubjects) {
+        const parsed = JSON.parse(savedSubjects);
+        // Filter out null/undefined values
+        const validIds = Array.isArray(parsed) ? parsed.filter(id => id != null && typeof id === 'number') : [];
+        setSelectedSubjectIds(validIds);
+      }
+      if (savedIndustries) {
+        const parsed = JSON.parse(savedIndustries);
+        // Filter out null/undefined values
+        const validIds = Array.isArray(parsed) ? parsed.filter(id => id != null && typeof id === 'number') : [];
+        setSelectedIndustryIds(validIds);
+      }
     } catch {}
   }, []);
 
@@ -178,7 +188,24 @@ const Profile: React.FC<any> = () => {
 								});
 								if (active) {
 									setSubjects(leaves);
-									setSubjectsTree(list || []);
+									// If list is flat (no children), rebuild grouped tree for collapsible dropdown
+									const anyHasChildren = (list || []).some((n: any) => Array.isArray(n?.children) && n.children.length > 0);
+									if (!anyHasChildren) {
+										const groupMap = new Map<string, any[]>();
+										(Array.isArray(list) ? list : []).forEach((item: any) => {
+											if (!item) return;
+											const keyRaw = item.course_name || item.courseTitle || item.category || 'Others';
+											const key = String(keyRaw).trim() || 'Others';
+											if (!groupMap.has(key)) groupMap.set(key, []);
+											groupMap.get(key)!.push({ ...item, selectable: true });
+										});
+										const groups = Array.from(groupMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+										const makeGroupId = (name: string) => `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+										const groupedTree = groups.map(([name, children]) => ({ id: makeGroupId(name), name, selectable: false, children }));
+										setSubjectsTree(groupedTree);
+									} else {
+										setSubjectsTree(list || []);
+									}
 									const map: Record<number, any> = {};
 									leaves.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
 									setSubjectMetaMap(map);
@@ -253,9 +280,32 @@ const Profile: React.FC<any> = () => {
 									walk(nodes || []);
 									return out;
 								};
-								const leaves = flatten(list);
+								let leaves = flatten(list);
+								leaves = leaves.map((l: any) => {
+									if (!l || typeof l !== 'object') return l;
+									const copy = { ...l };
+									delete copy.selectable;
+									return copy;
+								});
 								setSubjects(leaves);
-								setSubjectsTree(list || []);
+								// If list is flat, rebuild grouped tree for collapsible dropdown
+								const anyHasChildren = (list || []).some((n: any) => Array.isArray(n?.children) && n.children.length > 0);
+								if (!anyHasChildren) {
+									const groupMap = new Map<string, any[]>();
+									(Array.isArray(list) ? list : []).forEach((item: any) => {
+										if (!item) return;
+										const keyRaw = item.course_name || item.courseTitle || item.category || 'Others';
+										const key = String(keyRaw).trim() || 'Others';
+										if (!groupMap.has(key)) groupMap.set(key, []);
+										groupMap.get(key)!.push({ ...item, selectable: true });
+									});
+									const groups = Array.from(groupMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+									const makeGroupId = (name: string) => `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+									const groupedTree = groups.map(([name, children]) => ({ id: makeGroupId(name), name, selectable: false, children }));
+									setSubjectsTree(groupedTree);
+								} else {
+									setSubjectsTree(list || []);
+								}
 								const map: Record<number, any> = {};
 								leaves.forEach((item: any) => { if (item && item.id != null) map[item.id] = item; });
 								setSubjectMetaMap(map);

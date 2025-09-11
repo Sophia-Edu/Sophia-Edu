@@ -1,17 +1,22 @@
 import React, { useEffect, useState } from "react";
 import Layout from "../../DashboardLayout";
 
-import { Button, Form, Input, Select, Upload } from "antd";
+import { Button, Form, Input, Select, Upload, Checkbox, List } from "antd";
 import { URL } from "../../../utils/constants";
-import { ArrowLeftOutlined, LoadingOutlined, UploadOutlined } from "@ant-design/icons";
+
+import { ArrowLeftOutlined, LoadingOutlined, UploadOutlined, PlusOutlined } from "@ant-design/icons";
 import { CourseProps, useCourse } from "../../../store.tsx";
 import { toast } from "react-toastify";
-import { TutorRequest } from "../../../requests";
+import { TutorRequest, AdminRequest } from "../../../requests";
 import { useNavigate } from "react-router-dom";
 import { RichTextEditor } from "../../../components/editor.tsx";
 import tutorRequests from "../../../requests/tutor.request.tsx";
 import { message } from "antd";
-import { uploadImageToCloudinary } from "../../../utils/helperFunction.tsx";
+import { uploadImageToCloudinary, uploadFileToCloudinary, getTokenData } from "../../../utils/helperFunction.tsx";
+import { getStoredAuthToken, getUserType, setStoredAuthToken } from "../../../utils/storage";
+
+import ModuleManager from "../../../components/module/ModuleManager";
+import CollapsibleSection from "../../../components/CollapsibleSection";
 
 const handleBeforeUpload = (file: any) => {
   const allowedTypes = [
@@ -97,12 +102,26 @@ const CreateCoursePage: React.FC = () => {
   const [currentModule, setCurrentModule] = useState(0); // Track current module
   const [step, setStep] = useState<number>(1);
   const [categories, setCategories] = useState<any[]>([]);
+  const [courseMetadata, setCourseMetadata] = useState<{ course_titles: string[]; course_names: string[]; course_types: string[] } | null>(null);
+  const [metadataLoading, setMetadataLoading] = useState<boolean>(false);
   const [courseImage, setCourseImage] = useState<string | null>(null);
   const [imageUploading, setImageUploading] = useState<boolean>(false);
   const [modulesData, setModulesData] = useState<any[]>([]); // Store all modules data
   const [currentContentIndex, setCurrentContentIndex] = useState(0); // Track current content item within module
   const [moduleContents, setModuleContents] = useState<any[]>([]); // Store content items for current module
+  // New: module selection (optional) in step 1
+  const [availableModules, setAvailableModules] = useState<any[]>([]);
+  const [selectedModuleIds, setSelectedModuleIds] = useState<number[]>([]);
   const nav = useNavigate();
+  
+  // Toggle select existing module (optional)
+  const toggleModuleSelection = (moduleId: number) => {
+    setSelectedModuleIds((prev) =>
+      prev.includes(moduleId)
+        ? prev.filter((id) => id !== moduleId)
+        : [...prev, moduleId]
+    );
+  };
   
   // Handle image upload to Cloudinary
   const handleImageUpload = async (file: File) => {
@@ -122,20 +141,64 @@ const CreateCoursePage: React.FC = () => {
     }
   };
 
-  // Fetch categories when component mounts
+  // Fetch categories and course metadata when component mounts
   useEffect(() => {
-    const fetchCategories = async () => {
+    const fetchDropdownData = async () => {
       try {
+        setMetadataLoading(true);
+        // Categories
         const response: any = await TutorRequest.getCategories();
         setCategories(response.items || []);
+        // Course metadata (titles, names, types)
+        const metadataResponse: any = await AdminRequest.getCourseMetadata();
+        const md = metadataResponse?.data || metadataResponse;
+        setCourseMetadata({
+          course_titles: md?.course_titles || [],
+          course_names: md?.course_names || [],
+          course_types: md?.course_types || [],
+        });
       } catch (error: any) {
-        console.error("Error fetching categories:", error);
-        message.error("Failed to load categories");
+        console.error("Error loading dropdown data:", error);
+        message.error("Failed to load dropdown data");
+      } finally {
+        setMetadataLoading(false);
       }
     };
 
-    fetchCategories();
+    fetchDropdownData();
   }, []);
+
+  // Function to load available modules for selection
+  const loadAvailableModules = async () => {
+    try {
+      const list = await tutorRequests.listModules();
+      // Normalize items to a consistent shape for display
+      const normalized = (Array.isArray(list) ? list : []).map((m: any, idx: number) => {
+        const id = m?.id ?? m?.module_id ?? m?.moduleId ?? idx;
+        const name = m?.name ?? m?.title ?? `Module ${idx + 1}`;
+        const description = m?.description ?? m?.brief ?? '';
+        const lessons = Array.isArray(m?.data)
+          ? m.data
+          : Array.isArray(m?.lessons)
+          ? m.lessons
+          : Array.isArray(m?.contents)
+          ? m.contents
+          : [];
+        const data_entries_count = m?.data_entries_count ?? m?.lessons_count ?? (Array.isArray(lessons) ? lessons.length : 0);
+        return { ...m, id, name, title: m?.title ?? name, description, data: lessons, data_entries_count };
+      });
+      setAvailableModules(normalized);
+    } catch (err) {
+      console.error('Failed to load modules for selection', err);
+    }
+  };
+
+  // New: Fetch available modules for optional selection (step 1)
+  useEffect(() => {
+    if (step === 1) {
+      loadAvailableModules();
+    }
+  }, [step]);
 
   useEffect(() => {
     // Only run this effect in step 1
@@ -233,64 +296,92 @@ const CreateCoursePage: React.FC = () => {
     
     setLoading(true);
     try {
-      const formValues = form.getFieldsValue();
+      // Preflight: ensure backend sees instructor usertype cookie if your environment requires it
+      try {
+        const cookieType = getUserType();
+        let token: string | null = getStoredAuthToken();
+        if (!token && typeof window !== 'undefined') {
+          const ls = window.localStorage?.getItem('token');
+          if (ls && ls.trim()) token = ls.trim();
+        }
+        if (!cookieType && token) {
+          const payload: any = getTokenData(token);
+          const role = payload?.role || payload?.user_type || payload?.type || payload?.usertype;
+          const roles = payload?.roles || payload?.scopes || [];
+          const isInstructor = String(role || '').toLowerCase() === 'instructor' || (Array.isArray(roles) && roles.map((r: any) => String(r).toLowerCase()).includes('instructor'));
+          if (isInstructor) {
+            // This will set the usertype cookie without changing endpoints
+            setStoredAuthToken(token, 'instructor');
+          }
+        }
+      } catch {}
 
-      // Create a new object with all form values properly mapped
-      const updatedFormValues = {
-        courses: [
-          {
-            course_name: formValues.course_name,
-            title: formValues.course_title, 
-            brief: formValues.brief,
-            content: formValues.content,
-            course_type: formValues.course_type,
-            price: formValues.price,
-            number_of_modules: formValues.number_of_modules,
-            image: courseImage, // Changed from image_base64 to image with Cloudinary URL
-          },
-        ],
-        category_id: formValues.category_id,
+      const formValues = form.getFieldsValue();
+      const first = (v: any) => Array.isArray(v) ? v[0] : v;
+      const normCourseType = first(formValues.course_type);
+      const normCourseName = first(formValues.course_name);
+      const normCourseTitle = first(formValues.course_title);
+
+      // Create payload matching backend requirements
+      const selectedCategory = categories.find(cat => cat.id === formValues.category_id);
+      const categoryNames = selectedCategory ? [selectedCategory.name] : [];
+      
+      const basePayload = {
+        courses: [{
+          course_name: normCourseName,
+          title: normCourseTitle,
+          brief: formValues.brief,
+          content: formValues.content,
+          course_type: normCourseType,
+          price: formValues.price,
+          image: courseImage,
+        }],
+        categories: categoryNames, // Backend expects categories array, not category_id
       };
 
-      let courseId;
+      const selectedIds = Array.isArray(selectedModuleIds) ? selectedModuleIds.map(Number) : [];
 
-      if (course?.id) {
-        // Course already exists, use existing ID
-        courseId = course.id;
-      } else {
-        console.log("Creating new course with values:", updatedFormValues);
-        // Create new course
-        const addedCourse: any = await TutorRequest.createCourse(
-          updatedFormValues
-        );
-        setCourse(addedCourse.courses[0]);
-        courseId = addedCourse.course_id || addedCourse.courses[0].id;
-      }
-
-      // Update course state with the correct ID and proper mapping
-      setCourse((prevCourse: CourseProps | null): CourseProps => {
-        const newCourse: CourseProps = {
-          id: courseId,
-          brief: formValues.brief || '',
-          course_category: formValues.category_id || '',
-          course_title: formValues.course_title || '',
-          course_type: formValues.course_type || '',
-          number_of_module: formValues.number_of_modules || 1,
-          modules: prevCourse?.modules || []
+      if (selectedIds.length > 0) {
+        // Create single course with module_ids array - backend expects this format
+        const coursePayload = {
+          titles: normCourseTitle,
+          course_name: normCourseName,
+          content: formValues.content,
+          price: formValues.price,
+          module_ids: selectedIds,  // Backend expects array of module IDs
+          categories: categoryNames
         };
         
-        return newCourse;
-      });
+        console.log("Sending course payload with module_ids:", coursePayload);
+        console.log("Selected module IDs:", selectedIds);
+        
+        await TutorRequest.createCourse(coursePayload);
+        toast.success(`Course created successfully with ${selectedIds.length} modules attached!`);
+      } else {
+        // Create single course without modules
+        const coursePayload = {
+          ...basePayload,
+          courses: [{
+            ...basePayload.courses[0],
+            module_id: null
+          }]
+        };
+        
+        await TutorRequest.createCourse(coursePayload);
+        toast.success("Course created successfully!");
+      }
 
-      // Ensure moduleNumber state is preserved for step 2
-      const finalModuleCount = formValues.number_of_modules || 1;
-      setModuleNumber(finalModuleCount);
-      console.log("Transitioning to step 2 with", finalModuleCount, "modules");
-
-      setStep(step + 1);
-    } catch (error) {
+      nav(URL.COURSES);
+      return;
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const msg = error?.message || "";
+      if (status === 403 || /only instructors/i.test(msg)) {
+        toast.error("Only instructors can upload courses. Please log in as an instructor and try again.");
+      } else {
+        message.error("Failed to create course. Please try again.");
+      }
       console.error("Error creating course:", error);
-      message.error("Failed to create course. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -332,55 +423,100 @@ const CreateCoursePage: React.FC = () => {
   };
 
   // New function to format multiple modules for batch creation
-  const formatMultipleModulesPayload = (
+  const formatMultipleModulesPayload = async (
     allModulesData: any[],
     courseId: string
   ) => {
-    const modules = allModulesData.map((moduleData, index) => {
-      // Each module can have multiple content items in the data array
-      const dataArray = moduleData.contents?.map((contentItem: any, contentIndex: number) => {
-        let additionalResources = null;
-        let mediaFile = null;
+    const modules: any[] = [];
 
-        if (contentItem.additional_resources?.file) {
-          additionalResources = contentItem.additional_resources.file.name || "uploaded_file";
-        } else if (contentItem.additional_resources) {
-          additionalResources = contentItem.additional_resources;
+    for (let index = 0; index < allModulesData.length; index++) {
+      const moduleData = allModulesData[index] || {};
+
+      // lessons can be stored under data or contents in various parts of the UI
+      const lessonsSrc = moduleData.data || moduleData.contents || [];
+      const dataArr: any[] = [];
+
+      for (let i = 0; i < lessonsSrc.length; i++) {
+        const lesson = lessonsSrc[i] || {};
+
+        // normalize additional_resources and media_file
+        let additional_resources: any = lesson.additional_resources ?? null;
+        let media_file: any = lesson.media_file ?? null;
+
+        // handle Antd Upload file structures
+        if (additional_resources?.file) additional_resources = additional_resources.file;
+        if (additional_resources?.originFileObj) additional_resources = additional_resources.originFileObj;
+        if (Array.isArray(additional_resources) && additional_resources[0]?.originFileObj) additional_resources = additional_resources[0].originFileObj;
+
+        if (media_file?.originFileObj) media_file = media_file.originFileObj;
+        if (Array.isArray(media_file) && media_file[0]?.originFileObj) media_file = media_file[0].originFileObj;
+
+        // upload files if they are File objects
+        if (additional_resources instanceof File) {
+          try {
+            additional_resources = await uploadFileToCloudinary(additional_resources, additional_resources.type?.startsWith('image/') ? 'image' : 'auto');
+          } catch (err) {
+            console.error('Failed to upload lesson additional_resources', err);
+            additional_resources = null;
+          }
         }
 
-        if (contentItem.media_file?.name) {
-          mediaFile = contentItem.media_file.name;
-        } else if (contentItem.media_file) {
-          mediaFile = "uploaded_media";
+        if (media_file instanceof File) {
+          try {
+            media_file = await uploadFileToCloudinary(media_file, media_file.type?.startsWith('image/') ? 'image' : 'auto');
+          } catch (err) {
+            console.error('Failed to upload lesson media_file', err);
+            media_file = null;
+          }
         }
 
-        return {
-          title: contentItem.title || `Content ${contentIndex + 1}`,
-          content: contentItem.body || contentItem.content || `Content ${contentIndex + 1}`,
-          additional_resources: additionalResources,
-          media_file: mediaFile,
-          course_id: parseInt(courseId),
-          order: contentIndex + 1,
-        };
-      }) || [
-        {
-          title: moduleData.title || `Module ${index + 1}`,
-          content: moduleData.body || moduleData.content || `Content for Module ${index + 1}`,
-          additional_resources: moduleData.additional_resources,
-          media_file: moduleData.media_file,
-          course_id: parseInt(courseId),
-          order: 1,
-        }
-      ];
+        dataArr.push({
+          title: lesson.title || `Content ${i + 1}`,
+          content: lesson.body || lesson.content || '',
+          media_file: typeof media_file === 'string' ? media_file : null,
+          additional_resources: typeof additional_resources === 'string' ? additional_resources : null,
+          order: i + 1,
+        });
+      }
 
-      return {
+      // module-level media/resources
+      let module_additional_resources: any = moduleData.additional_resources ?? null;
+      let module_media_file: any = moduleData.media_file ?? null;
+
+      if (module_additional_resources?.originFileObj) module_additional_resources = module_additional_resources.originFileObj;
+      if (Array.isArray(module_additional_resources) && module_additional_resources[0]?.originFileObj) module_additional_resources = module_additional_resources[0].originFileObj;
+      if (module_media_file?.originFileObj) module_media_file = module_media_file.originFileObj;
+      if (Array.isArray(module_media_file) && module_media_file[0]?.originFileObj) module_media_file = module_media_file[0].originFileObj;
+
+      if (module_additional_resources instanceof File) {
+        try {
+          module_additional_resources = await uploadFileToCloudinary(module_additional_resources, module_additional_resources.type?.startsWith('image/') ? 'image' : 'auto');
+        } catch (err) {
+          console.error('Failed to upload module additional_resources', err);
+          module_additional_resources = null;
+        }
+      }
+
+      if (module_media_file instanceof File) {
+        try {
+          module_media_file = await uploadFileToCloudinary(module_media_file, module_media_file.type?.startsWith('image/') ? 'image' : 'auto');
+        } catch (err) {
+          console.error('Failed to upload module media_file', err);
+          module_media_file = null;
+        }
+      }
+
+      modules.push({
         name: moduleData.name || moduleData.title || `Module ${index + 1}`,
-        description: moduleData.description || `Description for Module ${index + 1}`,
+        title: moduleData.title || moduleData.name || `Module ${index + 1}`,
+        description: moduleData.description || '',
+        additional_resources: typeof module_additional_resources === 'string' ? module_additional_resources : null,
+        media_file: typeof module_media_file === 'string' ? module_media_file : null,
         order: index + 1,
-        is_template: true,
-        data: dataArray,
-      };
-    });
+        is_template: moduleData.is_template ?? false,
+        data: dataArr,
+      });
+    }
 
     return { modules };
   };
@@ -439,7 +575,7 @@ const CreateCoursePage: React.FC = () => {
       const moduleData = {
         name: `Module ${currentModule + 1}`,
         description: `Module ${currentModule + 1} Description`,
-        contents: updatedContents
+        data: updatedContents
       };
 
       // Add module data to the collection
@@ -459,7 +595,7 @@ const CreateCoursePage: React.FC = () => {
       } else {
         // All modules completed - create all modules at once
         console.log("Creating modules with data:", updatedModulesData);
-        const payload = formatMultipleModulesPayload(
+        const payload = await formatMultipleModulesPayload(
           updatedModulesData,
           String(course.id)
         );
@@ -687,7 +823,7 @@ const CreateCoursePage: React.FC = () => {
         const moduleData = {
           name: `Module ${currentModule + 1}`,
           description: `Module ${currentModule + 1} Description`,
-          contents: updatedContents
+          data: updatedContents
         };
         
         const updatedModulesData = [...modulesData];
@@ -703,7 +839,7 @@ const CreateCoursePage: React.FC = () => {
       setCurrentContentIndex(0);
       // Load previous module data if exists
       if (modulesData[currentModule - 1]) {
-        setModuleContents(modulesData[currentModule - 1].contents || []);
+        setModuleContents(modulesData[currentModule - 1].data || []);
       } else {
         setModuleContents([]);
       }
@@ -713,7 +849,26 @@ const CreateCoursePage: React.FC = () => {
     }
   };
 
-  console.log(course);
+  // Add a new empty module and jump to it
+  const handleAddModule = () => {
+    const newIndex = modulesData.length;
+    const newModule = {
+      name: `Module ${newIndex + 1}`,
+      title: `Module ${newIndex + 1}`,
+      description: '',
+      data: [],
+      order: newIndex + 1,
+      is_template: false,
+    };
+    const copy = [...modulesData, newModule];
+    setModulesData(copy);
+    setModuleNumber((prev) => Math.max(prev, copy.length));
+    setCurrentModule(newIndex);
+    setModuleContents([]);
+    message.success(`Added Module ${newIndex + 1}`);
+  };
+
+  // console.debug('Course state (step 1 init):', course);
 
   if (step === 1) {
     return (
@@ -743,11 +898,107 @@ const CreateCoursePage: React.FC = () => {
             </div>
           </div>
           <div className="w-full sm:w-1/2">
+            {/* Module manager: accessible from step 1 as well */}
+            <CollapsibleSection 
+              title="Module Management" 
+              defaultExpanded={false}
+              className="mb-4"
+              badge={
+                modulesData.length > 0 && (
+                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                    {modulesData.length} Created
+                  </span>
+                )
+              }
+            >
+              <ModuleManager 
+                modules={modulesData} 
+                setModules={setModulesData} 
+                courseId={course?.id as any}
+                onModuleCreated={loadAvailableModules}
+              />
+            </CollapsibleSection>
+            
+            {/* Optional: Select existing modules to prefill */}
+            <CollapsibleSection 
+              title="Select Existing Modules" 
+              defaultExpanded={selectedModuleIds.length > 0}
+              className="mb-4"
+              badge={
+                <div className="flex items-center gap-2">
+                  {selectedModuleIds.length > 0 && (
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      Selected: {selectedModuleIds.length}
+                    </span>
+                  )}
+                  {availableModules.length > 0 && (
+                    <span className="text-xs text-gray-500">
+                      {availableModules.length} Available
+                    </span>
+                  )}
+                </div>
+              }
+            >
+              <div className="mb-3">
+                <p className="text-xs text-gray-500 mb-3">Pick from your existing modules to prefill step 2. You can still add, edit, or delete modules later.</p>
+                
+                <div className="flex justify-end mb-2">
+                  <Button 
+                    size="small" 
+                    type="link" 
+                    onClick={() => setSelectedModuleIds([])}
+                    disabled={selectedModuleIds.length === 0}
+                  >
+                    Clear All
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md">
+                <List
+                  size="small"
+                  dataSource={availableModules}
+                  locale={{ emptyText: 'No modules found' }}
+                  renderItem={(m: any) => (
+                    <List.Item
+                      className="hover:bg-gray-50 transition-colors px-3 py-2"
+                      actions={[
+                        <span key="lessons" className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          Lessons: {m.data_entries_count ?? (Array.isArray(m.data) ? m.data.length : 0)}
+                        </span>
+                      ]}
+                    >
+                      <div className="flex items-start gap-3 w-full">
+                        <Checkbox
+                          checked={selectedModuleIds.includes(Number(m.id))}
+                          onChange={() => toggleModuleSelection(Number(m.id))}
+                          className="mt-1"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm text-gray-900 truncate">{m.name || m.title}</div>
+                          {m.description ? (
+                            <div className="text-xs text-gray-600 mt-1 line-clamp-2">{m.description}</div>
+                          ) : (
+                            <div className="text-xs text-gray-400 mt-1 italic">No description</div>
+                          )}
+                        </div>
+                      </div>
+                    </List.Item>
+                  )}
+                />
+              </div>
+              
+              {availableModules.length > 5 && (
+                <div className="mt-2 text-xs text-gray-500 text-center">
+                  Scroll to see more modules ({availableModules.length} total)
+                </div>
+              )}
+            </CollapsibleSection>
             <Form
               layout="vertical"
               form={form}
               onValuesChange={handleValuesChange}
-              initialValues={{ number_of_module: 1 }}
+              initialValues={{ number_of_modules: 1 }}
             >
               <Form.Item
                 label="Course Category"
@@ -779,14 +1030,20 @@ const CreateCoursePage: React.FC = () => {
                 name={"course_type"}
               >
                 <Select
-                  placeholder="Select a Course Type"
+                  placeholder="Select or enter course type"
                   className="!p-[20px] inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
+                  loading={metadataLoading}
+                  showSearch
+                  allowClear
+                  mode="tags"
+                  maxTagCount={1}
+                  maxTagTextLength={50}
                 >
-                  <Select.Option value="Programming">Programming</Select.Option>
-                  <Select.Option value="Design">Design</Select.Option>
-                  <Select.Option value="Business">Business</Select.Option>
-                  <Select.Option value="Marketing">Marketing</Select.Option>
-                  <Select.Option value="Other">Other</Select.Option>
+                  {courseMetadata?.course_types?.map((type, idx) => (
+                    <Select.Option key={idx} value={type}>
+                      {type}
+                    </Select.Option>
+                  ))}
                 </Select>
               </Form.Item>
 
@@ -798,7 +1055,22 @@ const CreateCoursePage: React.FC = () => {
                   { required: true, message: "Please enter course name" },
                 ]}
               >
-                <Input placeholder="Enter Course Name" className="p-2" />
+                <Select
+                  placeholder="Select or enter course name"
+                  className="!p-[20px] inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
+                  loading={metadataLoading}
+                  showSearch
+                  allowClear
+                  mode="tags"
+                  maxTagCount={1}
+                  maxTagTextLength={80}
+                >
+                  {courseMetadata?.course_names?.map((name, idx) => (
+                    <Select.Option key={idx} value={name}>
+                      {name}
+                    </Select.Option>
+                  ))}
+                </Select>
               </Form.Item>
 
               <Form.Item
@@ -809,7 +1081,22 @@ const CreateCoursePage: React.FC = () => {
                   { required: true, message: "Please enter course title" },
                 ]}
               >
-                <Input placeholder="Enter Course Title" className="p-2" />
+                <Select
+                  placeholder="Select or enter course title"
+                  className="!p-[20px] inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
+                  loading={metadataLoading}
+                  showSearch
+                  allowClear
+                  mode="tags"
+                  maxTagCount={1}
+                  maxTagTextLength={80}
+                >
+                  {courseMetadata?.course_titles?.map((title, idx) => (
+                    <Select.Option key={idx} value={title}>
+                      {title}
+                    </Select.Option>
+                  ))}
+                </Select>
               </Form.Item>
 
               <Form.Item
@@ -854,7 +1141,6 @@ const CreateCoursePage: React.FC = () => {
                 ]}
               >
                 <Select
-                  defaultValue={1}
                   className="!p-[20px] inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
                 >
                   {[1, 2, 3, 4, 5].map((count) => (
@@ -960,9 +1246,7 @@ const CreateCoursePage: React.FC = () => {
                     ? "Uploading Image..." 
                     : !courseImage 
                       ? "Upload Image First"
-                      : course?.id 
-                        ? "Continue with Modules" 
-                        : "Next"
+                      : "Create Course"
                   }
                 </Button>
               </div>
@@ -1011,6 +1295,33 @@ const CreateCoursePage: React.FC = () => {
             </div>
           </div>
             <div className="w-full sm:w-1/2">
+              {/* Module navigator + manager (create/update/delete modules & lessons) */}
+                <div className="mb-4">
+                  <div className="flex gap-2 items-center overflow-x-auto whitespace-nowrap py-2">
+                    {modulesData.map((m, idx) => (
+                      <Button
+                        key={idx}
+                        type={idx === currentModule ? 'primary' : 'default'}
+                        size="small"
+                        onClick={() => {
+                          setCurrentModule(idx);
+                          setModuleContents(m.data || []);
+                        }}
+                        className="!mr-2"
+                      >
+                        {m.name || m.title || `Module ${idx + 1}`}
+                      </Button>
+                    ))}
+                    <Button type="dashed" size="small" onClick={handleAddModule} icon={<PlusOutlined/>}>
+                      Add Module
+                    </Button>
+                  </div>
+                </div>
+                <ModuleManager 
+                  modules={modulesData} 
+                  setModules={setModulesData}
+                  onModuleCreated={loadAvailableModules}
+                />
             {/* Module and Content Progress */}
             <div className="bg-white text-center py-3 mb-4 text-[20px] inter-normal font-medium">
               MODULE {currentModule + 1} - Content Item {currentContentIndex + 1}
@@ -1101,26 +1412,27 @@ const CreateCoursePage: React.FC = () => {
               />
 
               {/* Proceed to add title button */}
-              <div className="my-4">
+              <div className="my-6">
                 {currentContentIndex < moduleContents.length ? (
-                  // User is editing existing content, show proceed to new option
-                  <Button 
-                    className="text-[#581A57] !hover:text-[#581A57] !hover:border-[#581A57] border-[#581A57] border-1 w-full" 
-                    type="default" 
+                  <Button
+                    className="text-[#581A57] !hover:text-[#581A57] !hover:border-[#581A57] border-[#581A57] border-1 w-full"
+                    type="default"
                     onClick={handleProceedToNew}
                   >
                     Update and proceed to add new content item
                   </Button>
                 ) : (
                   // User is adding new content, show add more option
-                  <Button 
-                    className="text-[#581A57] !hover:text-[#581A57] !hover:border-[#581A57] border-[#581A57] border-1 w-full" 
-                    type="default" 
+                  <Button
+                    className="text-[#581A57] !hover:text-[#581A57] !hover:border-[#581A57] border-[#581A57] border-1 w-full"
+                    type="default"
                     onClick={handleAddMoreContent}
                   >
                     Add this content item to Module {currentModule + 1}
                   </Button>
                 )}
+
+                {/* Module manager is available in the right column */}
               </div>
 
               {/* Show saved content items */}

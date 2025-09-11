@@ -3,11 +3,13 @@ import Layout from "../../Layout";
 import { Col, Input, Row, Skeleton, Pagination } from "antd";
 import { Select } from "antd";
 import "./courses.scss";
-import { Card } from "../../../components";
+import { Card, Breadcrumb } from "../../../components";
 import { LearningImg, SocialImg } from "../../../assets";
 import { useLocation, useNavigate } from "react-router-dom";
 import { URL } from "../../../utils/constants";
 import studentRequest from "../../../requests/students.request";
+import api from "../../../Api";
+import { HomeOutlined, SearchOutlined } from "@ant-design/icons";
 
 const { Option } = Select;
 
@@ -24,6 +26,7 @@ interface Course {
 		full_name: string;
 		id: number;
 		type: string;
+		profile_picture?: string;
 	};
 	image: string | null;
 	student_count: number;
@@ -40,25 +43,104 @@ const ListingPage: React.FC<any> = () => {
 	const [currentPage, setCurrentPage] = useState(1);
 	const [totalCourses, setTotalCourses] = useState(0);
 	const [totalPages, setTotalPages] = useState(1);
+	const [authorProfiles, setAuthorProfiles] = useState<{[key: number]: any}>({});
+	const [currentCategory, setCurrentCategory] = useState<string>("Learning Development.");
+	const [categoryDisplayName, setCategoryDisplayName] = useState<string>("Learning Development");
+	const [isSearchMode, setIsSearchMode] = useState(false);
+	const [searchLoading, setSearchLoading] = useState(false);
 	const nav = useNavigate();
 	const { state } = useLocation();
 
+	// Detect category from navigation state or URL
+	useEffect(() => {
+		// Get category from navigation state (e.g., "learning", "social")
+		const categoryFromState = state;
+		
+		console.log("Navigation state received:", categoryFromState);
+		
+		if (categoryFromState === "learning") {
+			setCurrentCategory("Learning Development.");
+			setCategoryDisplayName("Learning Development");
+			console.log("Set category to Learning Development.");
+		} else if (categoryFromState === "social") {
+			setCurrentCategory("Entrepreneurship and Innovation");
+			setCategoryDisplayName("Entrepreneurship and Innovation");
+			console.log("Set category to Entrepreneurship and Innovation");
+		} else if (categoryFromState === "programming") {
+			setCurrentCategory("Programming");
+			setCategoryDisplayName("Programming");
+			console.log("Set category to Programming");
+		} else {
+			// Default to Learning Development instead of All Courses
+			setCurrentCategory("Learning Development.");
+			setCategoryDisplayName("Learning Development");
+			console.log("Default category set to Learning Development.");
+		}
+	}, [state]);
+
 	useEffect(() => {
 		fetchCourses(currentPage);
-	}, [currentPage]);
+	}, [currentPage, currentCategory]);
+
+	// Trigger re-render when author profiles are updated
+	useEffect(() => {
+		// This will cause the component to re-render when authorProfiles changes
+		// which will update the avatars with the fetched profile pictures
+	}, [authorProfiles]);
+
+	// Fetch author profile data
+	const fetchAuthorProfile = async (authorId: number) => {
+		if (authorProfiles[authorId]) {
+			return authorProfiles[authorId]; // Return cached data
+		}
+
+		try {
+			// Use the correct instructor profile endpoint
+			const response = await api.get(`/instructor/profile/${authorId}`);
+			const profileData = response.data || response;
+			console.log(`Fetched profile for instructor ${authorId}:`, profileData);
+
+			// Cache the profile data
+			setAuthorProfiles(prev => ({
+				...prev,
+				[authorId]: profileData
+			}));
+
+			return profileData;
+		} catch (error) {
+			console.error(`Failed to fetch author profile for ID ${authorId}:`, error);
+			return null;
+		}
+	};
 
 	const fetchCourses = async (page: number = 1) => {
 		try {
 			setLoading(true);
-			const response = await studentRequest.getAllCourses(page);
-			console.log("Fetched courses:", response);
+			setIsSearchMode(false);
+			console.log("Fetching courses with category:", currentCategory);
+			// Pass current category to filter courses with per_page parameter
+			const response = await studentRequest.getAllCourses(page, currentCategory, undefined, undefined, 10);
 			
+			console.log("API Response:", response);
 			// Handle the response structure - it should already be the data from the API
 			const data = response as any;
 			setCourses(data.items || []);
 			setCurrentPage(data.current_page);
 			setTotalCourses(data.total);
 			setTotalPages(data.pages);
+
+			// Fetch profile data for all unique authors
+			if (data.items && data.items.length > 0) {
+				const uniqueAuthorIds = [...new Set(data.items.map((course: any) => course.author.id))] as number[];
+				
+				// Fetch profiles for authors we don't have cached
+				const profilesToFetch = uniqueAuthorIds.filter((id: number) => !authorProfiles[id]);
+				
+				if (profilesToFetch.length > 0) {
+					console.log("Fetching profiles for authors:", profilesToFetch);
+					await Promise.all(profilesToFetch.map((id: number) => fetchAuthorProfile(id)));
+				}
+			}
 		} catch (error) {
 			console.error("Failed to fetch courses:", error);
 			// Set empty state on error
@@ -71,61 +153,159 @@ const ListingPage: React.FC<any> = () => {
 		}
 	};
 
+	// New server-side search function
+	const searchCourses = async (searchQuery: string, page: number = 1) => {
+		try {
+			setSearchLoading(true);
+			setIsSearchMode(true);
+			console.log("Searching courses with query:", searchQuery);
+			
+			const response = await studentRequest.searchCourses(searchQuery, page, 10);
+			console.log("Search API Response:", response);
+			
+			const data = response as any;
+			setCourses(data.items || []);
+			setCurrentPage(data.current_page || page);
+			setTotalCourses(data.total || 0);
+			setTotalPages(data.pages || 1);
+
+			// Fetch profile data for search results
+			if (data.items && data.items.length > 0) {
+				const uniqueAuthorIds = [...new Set(data.items.map((course: any) => course.author.id))] as number[];
+				const profilesToFetch = uniqueAuthorIds.filter((id: number) => !authorProfiles[id]);
+				
+				if (profilesToFetch.length > 0) {
+					console.log("Fetching profiles for search results:", profilesToFetch);
+					await Promise.all(profilesToFetch.map((id: number) => fetchAuthorProfile(id)));
+				}
+			}
+		} catch (error) {
+			console.error("Failed to search courses:", error);
+			setCourses([]);
+			setTotalCourses(0);
+			setTotalPages(1);
+			setCurrentPage(1);
+		} finally {
+			setSearchLoading(false);
+		}
+	};
+
 	const handlePageChange = (page: number) => {
 		setCurrentPage(page);
 		// Scroll to top when page changes
 		window.scrollTo({ top: 0, behavior: 'smooth' });
+		
+		// Fetch appropriate data based on current mode
+		if (isSearchMode && searchTerm.trim()) {
+			searchCourses(searchTerm, page);
+		} else {
+			fetchCourses(page);
+		}
 	};
 
-	// Add effect to refetch when search/filter changes but debounce it
+	// Handle search with debouncing
 	useEffect(() => {
 		const timeoutId = setTimeout(() => {
-			if (currentPage === 1) {
+			if (searchTerm.trim()) {
+				// Perform server-side search
+				searchCourses(searchTerm, 1);
+			} else if (isSearchMode) {
+				// Clear search and return to category view
+				setIsSearchMode(false);
 				fetchCourses(1);
 			}
-		}, 300);
+		}, 500); // Increased debounce time for search
 
 		return () => clearTimeout(timeoutId);
-	}, [searchTerm, sortBy]);
+	}, [searchTerm]);
+
+	// Handle filter changes
+	useEffect(() => {
+		if (!isSearchMode && currentPage === 1) {
+			fetchCourses(1);
+		}
+	}, [sortBy]);
 
 	const handleChange = (value: string) => {
 		setSortBy(value);
 		setCurrentPage(1); // Reset to first page when filter changes
-		console.log(`Selected: ${value}`);
+		
+		// Update current category based on filter selection
+		if (value === "all") {
+			setCurrentCategory("");
+			setCategoryDisplayName("All Courses");
+		} else if (value === "programming") {
+			setCurrentCategory("Programming");
+			setCategoryDisplayName("Programming");
+		} else if (value === "learning-development") {
+			setCurrentCategory("Learning Development.");
+			setCategoryDisplayName("Learning Development");
+		} else if (value === "entrepreneurship") {
+			setCurrentCategory("Entrepreneurship and Innovation");
+			setCategoryDisplayName("Entrepreneurship and Innovation");
+		}
+		
+		console.log(`Selected: ${value}, Category: ${value === "all" ? "All" : value}`);
 	};
 
 	const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-		setSearchTerm(e.target.value);
+		const value = e.target.value;
+		setSearchTerm(value);
 		setCurrentPage(1); // Reset to first page when search changes
 	};
 
-	// Note: Since we're using server-side pagination, client-side filtering 
-	// is limited to the current page. For full search functionality,
-	// you might want to implement server-side search by modifying the API call
-	const filteredCourses = courses.filter(course => {
-		const matchesSearch = course.course_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-			course.brief?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-			course.categories.some(cat => cat.toLowerCase().includes(searchTerm.toLowerCase()));
-		
-		if (sortBy === "all") return matchesSearch;
-		return matchesSearch && course.categories.some(cat => 
-			cat.toLowerCase().includes(sortBy.toLowerCase())
-		);
-	});
 
-	// Generate avatar URL or fallback to default
-	const getAvatarUrl = (fullName: string) => {
-		// Create a default avatar URL using the first letter of the name
-		// You can replace this with a service like DiceBear or Gravatar
-		const initials = fullName
+	// Generate breadcrumb items based on current state
+	const getBreadcrumbItems = () => {
+		const items = [
+			{ title: "Home", href: "/student/home", icon: <HomeOutlined /> },
+			{ title: "Courses", href: "/student/courses" }
+		];
+
+		if (isSearchMode && searchTerm.trim()) {
+			items.push({
+				title: `Search Results for "${searchTerm}"`,
+				href: "",
+				icon: <SearchOutlined />
+			});
+		} else {
+			items.push({ title: categoryDisplayName, href: "" });
+		}
+
+		return items;
+	};
+
+	// Enhanced avatar generation function that handles admin/instructor types and profile pictures
+	const getAvatarUrl = (author: { full_name: string; type: string; id: number }) => {
+		// Check if we have profile data for this author
+		const profileData = authorProfiles[author.id];
+		
+		if (profileData) {
+			// Use the correct field name from the API response
+			const profilePic = profileData.profile_image;
+			
+			if (profilePic) {
+				console.log("Using profile picture for", author.full_name, ":", profilePic);
+				return profilePic;
+			}
+		}
+
+		// Generate initials from full name
+		const initials = author.full_name
 			.split(' ')
 			.map(name => name.charAt(0))
 			.join('')
 			.toUpperCase()
 			.slice(0, 2);
 		
-		// Using a placeholder avatar service with initials
-		return `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=581A57&color=fff&size=40`;
+		// Use different background colors based on author type
+		const backgroundColor = author.type === 'admin' ? '2563eb' : '581A57'; // Blue for admin, Purple for instructor
+		const textColor = 'fff';
+		
+		// Using a placeholder avatar service with initials and dynamic colors
+		const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=${backgroundColor}&color=${textColor}&size=64&font-size=0.33`;
+		console.log("Using fallback avatar:", fallbackUrl);
+		return fallbackUrl;
 	};
 
 	// Format price with NGN currency
@@ -152,23 +332,23 @@ const ListingPage: React.FC<any> = () => {
 					className="w-full sm:h-[332px]"
 				/>
 				<div className="px-[10px] sm:px-[30px] py-10 w-[100%] sm:w-[95%] mx-auto">
+					<Breadcrumb items={getBreadcrumbItems()} className="mb-6" />
 					<div className="flex justify-between">
 						<h3 className="text-[20px] font-semibold font-inter">
-							All Courses ({totalCourses})
+							{isSearchMode ? `Search Results for "${searchTerm}"` : `${categoryDisplayName} Courses`} ({totalCourses})
 						</h3>
 
 						<div className="flex gap-3 items-center">
 							<Select
 								defaultValue="all"
 								value={sortBy}
-								className="w-[120px] bg-transparent rounded-3xl h-[38px]"
+								className="w-[160px] bg-transparent rounded-3xl h-[38px]"
 								onChange={handleChange}
 							>
 								<Option value="all">All Courses</Option>
-								<Option value="web design">Web Design</Option>
-								<Option value="graphics design">Graphics Design</Option>
-								<Option value="security">Security</Option>
 								<Option value="programming">Programming</Option>
+								<Option value="learning-development">Learning Development</Option>
+								<Option value="entrepreneurship">Entrepreneurship & Innovation</Option>
 							</Select>
 							<Input
 								placeholder="Search for anything"
@@ -181,7 +361,7 @@ const ListingPage: React.FC<any> = () => {
 						</div>
 					</div>
 					<Row gutter={[16, 16]} className="my-4">
-						{loading ? (
+						{(loading || searchLoading) ? (
 							// Show skeleton loaders while loading
 							Array(6).fill(0).map((_, index) => (
 								<CourseSkeletonCard key={index} />
@@ -194,17 +374,8 @@ const ListingPage: React.FC<any> = () => {
 									<div className="text-sm">Check back later for new courses</div>
 								</div>
 							</Col>
-						) : filteredCourses.length === 0 ? (
-							<Col span={24} className="text-center py-8">
-								<div className="text-gray-500 text-lg">
-									No courses found matching your criteria
-								</div>
-								<div className="text-sm mt-2">
-									Try adjusting your search or filter
-								</div>
-							</Col>
 						) : (
-							filteredCourses.map((course) => (
+							courses.map((course: Course) => (
 								<Col
 									key={course.id}
 									className="gutter-row"
@@ -215,12 +386,12 @@ const ListingPage: React.FC<any> = () => {
 									<Card
 										image={course.image || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"}
 										name={course.author.full_name}
-										avatar={getAvatarUrl(course.author.full_name)}
+										avatar={getAvatarUrl(course.author)}
 										price={formatPrice(course.price)}
 										description={course.brief || course.content.substring(0, 100) + "..."}
 										buttonText="View Course"
 										buttonColor="#581A57"
-										subject={course.categories.join(', ')}
+										subject={Array.isArray(course.title) ? course.title.join(', ') : course.title}
 										buttonLink="..."
 										onClick={() => nav(`${URL.ABOUTCOURSE}${course.id}`)}
 										courseName={course.course_name}

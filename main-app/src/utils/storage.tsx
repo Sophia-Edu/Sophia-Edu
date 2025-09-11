@@ -4,6 +4,7 @@ const AUTH_TOKEN_KEY = "token";
 const TOKEN_EXPIRATION_KEY = "token_expiration";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const USER_TYPE = "usertype";
+const INSTRUCTOR_ID = "instructor_id";
 
 export const getStoredAuthToken = () => {
 	const token = Cookies.get(AUTH_TOKEN_KEY);
@@ -44,3 +45,10 @@ export const storeClientUser = (user: string) =>
 
 export const getStoredClientUser = () => Cookies.get("SClientUser");
 export const getUserType = () => Cookies.get("usertype");
+
+export const setInstructorId = (id: string | number) => {
+    if (id == null) return;
+    Cookies.set(INSTRUCTOR_ID, String(id));
+};
+
+export const getInstructorId = (): string | undefined => Cookies.get(INSTRUCTOR_ID);

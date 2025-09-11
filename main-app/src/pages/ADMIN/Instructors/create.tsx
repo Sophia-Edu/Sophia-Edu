@@ -70,7 +70,7 @@ const CreateCoursePage: React.FC = () => {
         setCourseSelections(newSelections);
     };
 	const getInstructorData = (values: any) => {
-		let { full_name, email, phone, password } = values;
+		let { full_name, email, phone, password, confirm_password } = values;
 		let courses = courseSelections.map((course) => ({
 			course_category: course.category,
 			course_type: course.type,
@@ -85,6 +85,7 @@ const CreateCoursePage: React.FC = () => {
 			email,
 			phone,
 			password,
+			confirm_password,
 			courses,
 		};
 	}

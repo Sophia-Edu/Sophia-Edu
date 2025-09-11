@@ -26,6 +26,28 @@ export const getRandomDate = () => {
 	}-${date.getDate()} ${date.getHours()}:${date.getMinutes()}pm`;
 };
 
+// Cache for preloaded images
+const imageCache = new Map<string, boolean>();
+
+export const preloadImage = (src: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+        if (imageCache.has(src)) {
+            resolve();
+            return;
+        }
+        
+        const img = new Image();
+        img.onload = () => {
+            imageCache.set(src, true);
+            resolve();
+        };
+        img.onerror = () => {
+            reject(new Error(`Failed to preload image: ${src}`));
+        };
+        img.src = src;
+    });
+};
+
 export const getAvatar = (avatar?: string) => {
     // Normalize and validate the incoming avatar value
     const val = (avatar ?? "").trim();
@@ -36,6 +58,14 @@ export const getAvatar = (avatar?: string) => {
     if (/\/assets\/empty-post\.svg$/i.test(val) || /empty-post\.svg$/i.test(val)) {
         return defaultAvatar as unknown as string;
     }
+    
+    // Preload the image for faster subsequent loads
+    if (val && val.startsWith('http')) {
+        preloadImage(val).catch(err => {
+            console.warn('Failed to preload avatar image:', err);
+        });
+    }
+    
     return val;
 };
 

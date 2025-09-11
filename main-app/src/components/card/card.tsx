@@ -193,7 +193,7 @@ const Container: React.FC<ICardProps> = ({
 					</p>
 					<Button
 						className="bg-[#581A57] text-white p-3 w-[100px]"
-						label="Subscribe"
+						label="Learn More"
 						onclick={() => setOpen(true)}
 					/>
 				</div>

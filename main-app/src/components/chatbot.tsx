@@ -91,9 +91,9 @@ export function ChatBox({ isOpen, onClose }: ChatBoxProps) {
     return (
         <div className="fixed bottom-20 right-4 w-96 h-[600px] bg-white rounded-lg shadow-xl flex flex-col border border-gray-200">
             {/* Header */}
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-blue-600 text-white rounded-t-lg">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-[#581A57] text-white rounded-t-lg">
                 <h3 className="font-semibold">AI Assistant</h3>
-                <button onClick={onClose} className="hover:bg-blue-700 p-1 rounded">
+                <button onClick={onClose} className="hover:bg-[#4a1549] p-1 rounded">
                     <X className="w-5 h-5" />
                 </button>
             </div>
@@ -122,7 +122,7 @@ export function ChatBox({ isOpen, onClose }: ChatBoxProps) {
                                 className={cn(
                                     "max-w-[80%] rounded-lg p-3",
                                     message.isUser
-                                        ? "bg-blue-600 text-white rounded-br-none"
+                                        ? "bg-[#581A57] text-white rounded-br-none"
                                         : "bg-gray-100 text-gray-900 rounded-bl-none"
                                 )}
                             >
@@ -148,7 +148,7 @@ export function ChatBox({ isOpen, onClose }: ChatBoxProps) {
                                 onClick={() => handleSend(suggestion)}
                                 className="w-full text-left p-3 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors flex items-center space-x-2 text-sm"
                             >
-                                <MessageSquare className="w-4 h-4 text-blue-600" />
+                                <MessageSquare className="w-4 h-4 text-[#581A57]" />
                                 <span>{suggestion}</span>
                             </button>
                         ))}
@@ -165,11 +165,11 @@ export function ChatBox({ isOpen, onClose }: ChatBoxProps) {
                         onChange={(e) => setInput(e.target.value)}
                         onKeyPress={(e) => e.key === 'Enter' && handleSend()}
                         placeholder="Type your message..."
-                        className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#581A57]"
                     />
                     <button
                         onClick={() => handleSend()}
-                        className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                        className="p-2 bg-[#581A57] text-white rounded-lg hover:bg-[#4a1549] transition-colors"
                     >
                         <Send className="w-5 h-5" />
                     </button>

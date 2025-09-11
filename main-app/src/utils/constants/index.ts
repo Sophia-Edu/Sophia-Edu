@@ -35,6 +35,7 @@ export const URL = {
 	STUDENTS_LIST: "/instructor/students",
 	TUTOR_WALLET: "/instructor/wallet",
 	SETTINGS: "/instructor/settings",
+	INSTRUCTOR_SURVEYS: "/instructor/surveys",
 	TUTORLOGIN: "/instructor/login",
 
 	//Admin URL
@@ -52,6 +53,8 @@ export const URL = {
 	ADMIN_CATEGORIES: "/admin/categories",
 	ADMIN_CREATE_CATEGORY: "/admin/categories/create",
 	ADMIN_SUBJECTS_INDUSTRIES: "/admin/subjects-industries",
+	ADMIN_COURSE_METADATA_BULK_UPLOAD: "/admin/courses/metadata-bulk-upload",
+	ADMIN_SURVEYS: "/admin/surveys",
 	ADMIN_LOGIN: "/admin/login",
 };
 

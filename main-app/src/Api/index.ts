@@ -29,10 +29,24 @@ api.interceptors.request.use(
         const shouldAttachAuth = !unauthenticatedPaths.some((p) => url.includes(p));
 
         // Cast request.headers to AxiosHeaders
+        // Pull token from cookies first, fall back to localStorage if needed (for older login flows)
+        let token: string | null = null;
+        try {
+            token = getStoredAuthToken();
+            if (!token && typeof window !== 'undefined') {
+                const ls = window.localStorage?.getItem('token');
+                if (ls && typeof ls === 'string' && ls.trim().length > 0) {
+                    token = ls.trim();
+                }
+            }
+        } catch (_) {
+            // non-fatal
+        }
+
         request.headers = {
             ...(request.headers as AxiosHeaders),
-            ...(shouldAttachAuth && getStoredAuthToken()
-                ? { Authorization: `Bearer ${getStoredAuthToken()}` }
+            ...(shouldAttachAuth && token
+                ? { Authorization: `Bearer ${token}` }
                 : {}),
         };
         return request;
@@ -50,8 +64,14 @@ api.interceptors.response.use(
             const url = String(response?.config?.url || "");
             if (url.includes("/subjects_for_follow")) {
                 const d = response?.data;
-                if (Array.isArray(d)) {
-                    response.data = d.map((item: any) => {
+                // If backend returns an envelope { flat: [...] }, unwrap it for consumers expecting an array
+                if (d && typeof d === "object" && Array.isArray((d as any).flat)) {
+                    response.data = (d as any).flat;
+                }
+                // Sanitize array items by removing course category metadata (subjects endpoint)
+                const current = response?.data;
+                if (Array.isArray(current)) {
+                    response.data = current.map((item: any) => {
                         if (item && typeof item === "object") {
                             const copy = { ...item };
                             delete (copy as any).course_category;
@@ -60,8 +80,8 @@ api.interceptors.response.use(
                         }
                         return item;
                     });
-                } else if (d && typeof d === "object") {
-                    const copy = { ...d };
+                } else if (current && typeof current === "object") {
+                    const copy = { ...current };
                     delete (copy as any).course_category;
                     delete (copy as any).courseCategory;
                     response.data = copy;

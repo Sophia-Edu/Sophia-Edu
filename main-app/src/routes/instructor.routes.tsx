@@ -5,6 +5,7 @@ import {
 	SettingsPage,
 	StudentsPage,
 	TutorWalletPage,
+	SurveyManagementPage,
 } from "../pages/TUTOR";
 import { URL } from "../utils/constants";
 
@@ -38,6 +39,11 @@ const instructorRoutes = [
         path: URL.SETTINGS,
         element: <SettingsPage />,
         name: 'Instructor Settings',
+    },
+    {
+        path: URL.INSTRUCTOR_SURVEYS,
+        element: <SurveyManagementPage />,
+        name: 'Survey Management',
     },
 ]
 

@@ -14,6 +14,8 @@ import {
  AdminStudentsPage,
  AdminTutorWalletPage,
   AdminSubjectsIndustriesUploadPage,
+ AdminCourseMetadataBulkUploadPage,
+ AdminSurveyManagementPage,
 } from "../pages/ADMIN";
 
 const adminRoutes = [
@@ -85,6 +87,16 @@ const adminRoutes = [
         path: URL.ADMIN_SUBJECTS_INDUSTRIES,
         element: <AdminSubjectsIndustriesUploadPage />,
         name: 'Admin Subjects & Industries Upload',
+    },
+    {
+        path: URL.ADMIN_COURSE_METADATA_BULK_UPLOAD,
+        element: <AdminCourseMetadataBulkUploadPage />,
+        name: 'Admin Course Metadata Bulk Upload',
+    },
+    {
+        path: URL.ADMIN_SURVEYS,
+        element: <AdminSurveyManagementPage />,
+        name: 'Admin Survey Management',
     },
 ]
 

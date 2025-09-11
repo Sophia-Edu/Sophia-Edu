@@ -7,3 +7,4 @@ export { default as Table } from "./table/table";
 export { default as LogOutModal } from "./modal/logoutModal";
 export { default as Checkout } from "./checkcout/stripe";
 export {default as TabPanel } from "./tabPanel.tsx";
+export { default as Breadcrumb } from "./breadcrumb/Breadcrumb";

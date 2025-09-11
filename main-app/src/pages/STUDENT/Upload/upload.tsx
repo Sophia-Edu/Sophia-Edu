@@ -63,7 +63,24 @@ const Upload: React.FC<any> = () => {
     const leaves = leavesRaw.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
         if (active) {
           setSubjects(leaves as Array<{ id: number; name: string }>);
-          setSubjectsTree(list || []);
+          // If list is flat (no children), rebuild a grouped tree by course_name
+          const anyHasChildren = (list || []).some((n: any) => Array.isArray(n?.children) && n.children.length > 0);
+          if (!anyHasChildren) {
+            const groupMap = new Map<string, any[]>();
+            (Array.isArray(list) ? list : []).forEach((item: any) => {
+              if (!item) return;
+              const keyRaw = item.course_name || item.courseTitle || item.category || 'Others';
+              const key = String(keyRaw).trim() || 'Others';
+              if (!groupMap.has(key)) groupMap.set(key, []);
+              groupMap.get(key)!.push({ ...item, selectable: true });
+            });
+            const groups = Array.from(groupMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+            const makeGroupId = (name: string) => `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            const groupedTree = groups.map(([name, children]) => ({ id: makeGroupId(name), name, selectable: false, children }));
+            setSubjectsTree(groupedTree);
+          } else {
+            setSubjectsTree(list || []);
+          }
         }
       } catch (err: any) {
         console.error("Failed to load subjects", err);

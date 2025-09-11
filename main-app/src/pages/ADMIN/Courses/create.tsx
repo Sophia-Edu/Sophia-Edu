@@ -22,6 +22,13 @@ interface Category {
 	name: string;
 }
 
+interface CourseMetadata {
+	course_titles: string[];
+	course_names: string[];
+	course_types: string[];
+	categories: Category[];
+}
+
 const CreateCoursePage: React.FC = () => {
 	const [form] = Form.useForm();
 	const [loading, setLoading] = useState(false);
@@ -30,17 +37,23 @@ const CreateCoursePage: React.FC = () => {
 	const [categories, setCategories] = useState<Category[]>([]);
 	const [courseTitles, setCourseTitles] = useState<string[]>(['']); // Array to store multiple course titles
 	const [instructors, setInstructors] = useState<any[]>([]);
+	const [courseMetadata, setCourseMetadata] = useState<CourseMetadata | null>(null);
+	const [metadataLoading, setMetadataLoading] = useState(false);
 	const [isAddCategoryModalVisible, setIsAddCategoryModalVisible] = useState(false);
 	const [newCategoryName, setNewCategoryName] = useState('');
 	const [addingCategory, setAddingCategory] = useState(false);
 	
-	// Fetch categories and instructors when component mounts
+	// Fetch categories, instructors, and course metadata when component mounts
 	useEffect(() => {
 		const fetchData = async () => {
 			try {
-				// Fetch categories
-				const categoriesResponse:any = await AdminRequest.getCategories();
-				setCategories(categoriesResponse.items || []);
+				setMetadataLoading(true);
+				
+				// Fetch course metadata (includes categories)
+				const metadataResponse = await AdminRequest.getCourseMetadata();
+				const metadata = metadataResponse.data || metadataResponse;
+				setCourseMetadata(metadata);
+				setCategories(metadata.categories || []);
 				
 				// Fetch instructors
 				const instructorsResponse = await AdminRequest.getInstructors();
@@ -48,6 +61,8 @@ const CreateCoursePage: React.FC = () => {
 			} catch (error: any) {
 				console.error("Error fetching data:", error);
 				AlertFailure(error.message);
+			} finally {
+				setMetadataLoading(false);
 			}
 		};
 		
@@ -75,7 +90,7 @@ const CreateCoursePage: React.FC = () => {
 	};
 	
 	const getCourseData = (values: any) => {
-		const { course_name, course_type, price, category_ids, instructor_id, content, number_of_modules, module_ids, brief, additional_resources } = values;
+		const { course_name, course_type, course_titles, price, category_ids, instructor_id, content, number_of_modules, module_ids, brief, additional_resources } = values;
 		
 		// Convert category_ids to category names if needed
 		const selectedCategories = category_ids?.map((id: number) => {
@@ -83,10 +98,14 @@ const CreateCoursePage: React.FC = () => {
 			return category?.name || "";
 		}).filter(Boolean) || [];
 		
+		// Handle course_name and course_type as single values (extract from array if needed)
+		const finalCourseName = Array.isArray(course_name) ? course_name[0] : course_name;
+		const finalCourseType = Array.isArray(course_type) ? course_type[0] : course_type;
+		
 		return {
-			titles: courseTitles.filter(title => title.trim()), // Array of titles
-			course_name,
-			course_type,
+			titles: course_titles || courseTitles.filter(title => title.trim()), // Use form field or fallback to state
+			course_name: finalCourseName,
+			course_type: finalCourseType,
 			content: content || "",
 			price: price ? parseFloat(price) : null,
 			categories: selectedCategories, // Use category names instead of IDs
@@ -174,56 +193,58 @@ const CreateCoursePage: React.FC = () => {
 						</div>
 						
 						<Form.Item label="Course Type" name="course_type" className="inter-normal">
-							<Input placeholder="Enter course type" className="p-2" />
+							<Select
+								placeholder="Select or enter course type"
+								className="!px-[20px] py-2 inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
+								loading={metadataLoading}
+								showSearch
+								allowClear
+								mode="tags"
+							>
+								{courseMetadata?.course_types?.map((type, index) => (
+									<Select.Option key={index} value={type}>
+										{type}
+									</Select.Option>
+								))}
+							</Select>
 						</Form.Item>
 						
 						<Form.Item label="Course Name" name="course_name" className="inter-normal" rules={[{ required: true, message: 'Please enter course name' }]}>
-							<Input placeholder="Enter course name" className="p-2" />
+							<Select
+								placeholder="Select or enter course name"
+								className="!px-[20px] py-2 inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
+								loading={metadataLoading}
+								showSearch
+								allowClear
+								mode="tags"
+								maxTagCount={1}
+								maxTagTextLength={50}
+							>
+								{courseMetadata?.course_names?.map((name, index) => (
+									<Select.Option key={index} value={name}>
+										{name}
+									</Select.Option>
+								))}
+							</Select>
 						</Form.Item>
 						
-						<Form.Item label="Course Title" className="mb-0">
-							<div className="flex justify-between items-center">
-								<span className="text-[#666666]">Add Course Titles</span>
-								<Button
-									className="text-[#581A57]"
-									type="link"
-									onClick={() => setCourseTitles([...courseTitles, ''])}
-								>
-									+ Add Title
-								</Button>
-							</div>
-						</Form.Item>
-						{courseTitles.map((title, index) => (
-							<Form.Item
-								key={index}
-								className="inter-normal mb-2"
+						<Form.Item label="Course Titles" name="course_titles" className="inter-normal">
+							<Select
+								placeholder="Select or enter course titles"
+								className="!px-[20px] py-2 inter-bold bg-[#fff] !text-black !outline-none !hover:border-none !border-none rounded-[6px]"
+								loading={metadataLoading}
+								showSearch
+								allowClear
+								mode="tags"
+								onChange={(values) => setCourseTitles(values || [''])}
 							>
-								<div className="flex items-center">
-									<Input
-										placeholder={`Enter title ${index + 1}`}
-										className="p-2"
-										value={title}
-										onChange={(e) => {
-											const newTitles = [...courseTitles];
-											newTitles[index] = e.target.value;
-											setCourseTitles(newTitles);
-										}}
-									/>
-									{courseTitles.length > 1 && (
-										<Button
-											className="ml-2 text-red-500"
-											type="link"
-											onClick={() => {
-												const newTitles = courseTitles.filter((_, i) => i !== index);
-												setCourseTitles(newTitles);
-											}}
-										>
-											Remove
-										</Button>
-									)}
-								</div>
-							</Form.Item>
-						))}
+								{courseMetadata?.course_titles?.map((title, index) => (
+									<Select.Option key={index} value={title}>
+										{title}
+									</Select.Option>
+								))}
+							</Select>
+						</Form.Item>
 						
 						<Form.Item label="Course Content" name="content" className="inter-normal" rules={[{ required: true, message: 'Please enter course content' }]}>
 							<Input.TextArea placeholder="Enter course content" className="p-2" rows={6} />

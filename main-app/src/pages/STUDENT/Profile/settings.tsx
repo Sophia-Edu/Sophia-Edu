@@ -28,8 +28,18 @@ const Profile: React.FC<any> = () => {
     try {
       const savedSubjects = localStorage.getItem("followed_subject_ids");
       const savedIndustries = localStorage.getItem("followed_industry_ids");
-      if (savedSubjects) setSelectedSubjectIds(JSON.parse(savedSubjects));
-      if (savedIndustries) setSelectedIndustryIds(JSON.parse(savedIndustries));
+      if (savedSubjects) {
+        const parsed = JSON.parse(savedSubjects);
+        // Filter out null/undefined values
+        const validIds = Array.isArray(parsed) ? parsed.filter(id => id != null && typeof id === 'number') : [];
+        setSelectedSubjectIds(validIds);
+      }
+      if (savedIndustries) {
+        const parsed = JSON.parse(savedIndustries);
+        // Filter out null/undefined values
+        const validIds = Array.isArray(parsed) ? parsed.filter(id => id != null && typeof id === 'number') : [];
+        setSelectedIndustryIds(validIds);
+      }
     } catch {}
   }, []);
 
@@ -46,7 +56,8 @@ const Profile: React.FC<any> = () => {
         if (Array.isArray(tree)) list = tree;
         else if (tree && typeof tree === 'object' && tree.id != null) list = [tree];
         else if (Array.isArray(raw?.flat)) list = raw.flat;
-  const flatten = (nodes: any[]): any[] => {
+
+        const flatten = (nodes: any[]): any[] => {
           const out: any[] = [];
           const walk = (arr: any[]) => {
             (arr || []).forEach((n) => {
@@ -58,10 +69,39 @@ const Profile: React.FC<any> = () => {
           walk(nodes || []);
           return out;
         };
-  let leaves = flatten(list);
-  leaves = leaves.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
-  setSubjects(leaves as Array<{ id: number; name: string }>);
-  setSubjectsTree(list || []);
+
+        // Build leaves from existing list (if it's already a tree this returns leaves)
+        let leaves = flatten(list);
+        leaves = leaves.map((l: any) => { if (!l || typeof l !== 'object') return l; const c = { ...l }; delete c.selectable; return c; });
+        setSubjects(leaves as Array<{ id: number; name: string }>);
+
+        // If the backend returned a flat array (no children on any node), rebuild a grouped tree
+        const anyHasChildren = (list || []).some((n: any) => Array.isArray(n?.children) && n.children.length > 0);
+        if (!anyHasChildren) {
+          // Group by course_name if available, else bucket under 'Others'
+          const groupMap = new Map<string, any[]>();
+          (Array.isArray(list) ? list : []).forEach((item: any) => {
+            if (!item) return;
+            const keyRaw = item.course_name || item.courseTitle || item.category || 'Others';
+            const key = String(keyRaw).trim() || 'Others';
+            if (!groupMap.has(key)) groupMap.set(key, []);
+            // Ensure leaves are selectable under the group
+            groupMap.get(key)!.push({ ...item, selectable: true });
+          });
+          // Deterministic ordering: alphabetic by group name
+          const groups = Array.from(groupMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+          const makeGroupId = (name: string) => `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+          const groupedTree = groups.map(([name, children]) => ({
+            id: makeGroupId(name),
+            name,
+            selectable: false,
+            children,
+          }));
+          setSubjectsTree(groupedTree);
+        } else {
+          // Already a tree structure
+          setSubjectsTree(list || []);
+        }
       } catch (err: any) {
         console.error("Failed to load subjects", err);
         message.error(err?.response?.data?.error || "Failed to load subjects");

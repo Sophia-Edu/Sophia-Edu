@@ -13,3 +13,5 @@ export { default as AdminCreateCategoryPage } from "./Categories/create";
 export { default as AdminCreateInstructorPage } from "./Instructors/create";
 export { default as AdminLogin } from "./Login/Loginpage";
 export { default as AdminSubjectsIndustriesUploadPage } from "./SubjectsIndustries/upload";
+export { default as AdminCourseMetadataBulkUploadPage } from "./Courses/metadata-bulk-upload";
+export { default as AdminSurveyManagementPage } from "./Surveys";
