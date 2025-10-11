@@ -22,7 +22,7 @@ const AboutPage: React.FC = () => {
 					className="inter-normal text-justify  sm:text-center"
 					style={{ marginBottom: 18, lineHeight: 2 }}
 				>
-					Sophia is an ambitious for-profit education technology and career
+					Sophia is an ambitious education technology and career
 					development social enterprise offering tailored preparatory training
 					on relevant academic and entrepreneurial skills for higher education
 					students and young professionals. Sophia also provides a professional
