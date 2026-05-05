@@ -1,7 +1,7 @@
 import os
 import datetime
 from datetime import timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import JWTManager, create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
@@ -25,6 +25,7 @@ from math import radians, sin, cos, sqrt, atan2
 import json
 from sqlalchemy import func, distinct, text
 import base64
+import secrets
 
 # Load environment variables
 load_dotenv()
@@ -40,8 +41,6 @@ os.makedirs(app.config['PEER_REVIEW_UPLOAD_FOLDER'], exist_ok=True)
 UPLOAD_FOLDER = 'uploads/user_posts'
 app.config['USER_POST_UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(app.config['USER_POST_UPLOAD_FOLDER'], exist_ok=True)
-app.config['DOCUMENTS_UPLOAD_FOLDER'] = 'uploads/documents'
-os.makedirs(app.config['DOCUMENTS_UPLOAD_FOLDER'], exist_ok=True)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
 app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
@@ -53,6 +52,80 @@ jwt = JWTManager(app)
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
 db = SQLAlchemy(app)
+
+# -------------------- Media helpers and paths --------------------
+# We will store public media under the Flask static folder at 'static/uploads/...'
+# Build absolute filesystem paths for saving, and store DB values as 'uploads/...'
+STATIC_ROOT = os.path.join(app.root_path, 'static')
+STATIC_UPLOADS_ROOT = os.path.join(STATIC_ROOT, 'uploads')
+COURSES_MEDIA_SUBDIR = 'courses'
+COURSE_VIDEOS_SUBDIR = 'course_videos'
+MODULES_MEDIA_SUBDIR = 'modules'
+
+def ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
+
+def build_media_url(rel_path: str):
+    """Return an external URL for a path stored relative to the static folder (e.g., 'uploads/...').
+    Handles legacy stored values like 'courses/filename.jpg' by prefixing 'uploads/'.
+    If an absolute URL is provided, returns it unchanged.
+    """
+    if not rel_path:
+        return None
+    # Already absolute URL
+    if isinstance(rel_path, str) and (rel_path.startswith('http://') or rel_path.startswith('https://')):
+        return rel_path
+    # Normalize to be relative under 'uploads/...'
+    rel_path = rel_path.lstrip('/')
+    if not rel_path.startswith('uploads/'):
+        rel_path = f'uploads/{rel_path}'
+    return url_for('static', filename=rel_path, _external=True)
+
+# Serve uploads without the '/static' prefix for convenience
+@app.route('/uploads/<path:filename>')
+def serve_uploads(filename):
+    # filename is expected to be like 'documents/file.pdf' or 'courses/img.png'
+    return send_from_directory(STATIC_UPLOADS_ROOT, filename)
+
+# Ensure base media directories exist and configure app
+ensure_dir(STATIC_UPLOADS_ROOT)
+COURSE_VIDEO_UPLOAD_FOLDER = os.path.join(STATIC_UPLOADS_ROOT, COURSE_VIDEOS_SUBDIR)
+ensure_dir(COURSE_VIDEO_UPLOAD_FOLDER)
+app.config['COURSE_VIDEO_UPLOAD_FOLDER'] = COURSE_VIDEO_UPLOAD_FOLDER
+# Configure documents directories now that STATIC_UPLOADS_ROOT exists
+DOCUMENTS_SUBDIR = 'documents'
+DOCUMENTS_UPLOAD_FOLDER = os.path.join(STATIC_UPLOADS_ROOT, DOCUMENTS_SUBDIR)
+ensure_dir(DOCUMENTS_UPLOAD_FOLDER)
+app.config['DOCUMENTS_UPLOAD_FOLDER'] = DOCUMENTS_UPLOAD_FOLDER
+app.config['DOCUMENTS_RELATIVE_URL_PREFIX'] = f'uploads/{DOCUMENTS_SUBDIR}'
+
+# Cloudinary upload helper
+def upload_to_cloudinary(file_or_bytes, folder: str, resource_type: str = 'auto', public_id: str = None):
+    """Upload a file-like object, raw bytes, or path to Cloudinary and return secure_url."""
+    options = { 'folder': folder, 'resource_type': resource_type }
+    if public_id:
+        options['public_id'] = public_id
+    result = cloudinary.uploader.upload(file_or_bytes, **options)
+    return result.get('secure_url')
+
+def is_cloudinary_url(url: str) -> bool:
+    return isinstance(url, str) and url.startswith('https://res.cloudinary.com/')
+
+# Allowed file helpers for backend uploads
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm'}
+
+def allowed_image(filename: str) -> bool:
+    if not filename:
+        return False
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ALLOWED_IMAGE_EXTENSIONS
+
+def allowed_video(filename: str) -> bool:
+    if not filename:
+        return False
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ALLOWED_VIDEO_EXTENSIONS
 
 #follow
 course_followers = db.Table('course_followers',
@@ -105,6 +178,8 @@ class User(db.Model):
     bio = db.Column(db.String(500), nullable=True)
     phone_number = db.Column(db.String(20), nullable=True)
     profile_image = db.Column(db.String(200), nullable=True)
+    cover_photo = db.Column(db.String(200), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
     date_created = db.Column(db.DateTime, default=datetime.datetime.now)
     last_login = db.Column(db.DateTime, default=datetime.datetime.now, onupdate=datetime.datetime.now)
     
@@ -170,9 +245,16 @@ class Notification(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
    
 
-    
- 
+    # Password reset token model
+class PasswordResetToken(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    token = db.Column(db.String(255), unique=True, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
 
+    user = db.relationship('User', backref=db.backref('password_reset_tokens', lazy='dynamic'))
 
 # Course model
 class Course(db.Model):
@@ -188,33 +270,65 @@ class Course(db.Model):
     additional_resources = db.Column(db.String(200), nullable=True)  # Added for Figma design
     price = db.Column(db.Float, nullable=False, default=0.0)
     student_count = db.Column(db.Integer, default=0)
-    status = db.Column(db.String(50), default='draft')  # draft, published, archived
+    status = db.Column(db.String(50), default='published')  # published, draft, archived
     author_id = db.Column(db.Integer, nullable=False)  # Can be admin.id or instructor.id
     instructor_id = db.Column(db.Integer, db.ForeignKey('instructor.id'), nullable=True)
     is_admin_author = db.Column(db.Boolean, default=False)  # Flag to identify admin authors
-    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
-    last_updated = db.Column(db.DateTime, onupdate=datetime.datetime.now)
+    module_id = db.Column(db.Integer, db.ForeignKey('module.id'), nullable=True)  # Course belongs to module
+    order = db.Column(db.Integer, nullable=True)  # Order within the module
     date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     last_updated = db.Column(db.DateTime, onupdate=datetime.datetime.utcnow)
     categories = db.relationship('CourseCategory', secondary='course_category_association', back_populates='courses')
-    modules = db.relationship('Module', backref='course', lazy='dynamic')
 
     def update_student_count(self):
         self.student_count = self.enrolled_users.count()
         db.session.commit()
 
+    def get_display_title(self):
+        """Get a display-friendly title. Returns first title if array, or the title itself if string."""
+        if isinstance(self.title, list) and len(self.title) > 0:
+            return self.title[0]
+        elif isinstance(self.title, str):
+            return self.title
+        else:
+            return "Untitled Course"
+
+    def get_all_titles(self):
+        """Get all titles as a list. Ensures backward compatibility."""
+        if isinstance(self.title, list):
+            return self.title
+        elif isinstance(self.title, str):
+            return [self.title]
+        else:
+            return ["Untitled Course"]
+
 # Module model
 class Module(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)  # Module-level description
+    order = db.Column(db.Integer, nullable=True)
+    is_template = db.Column(db.Boolean, default=True)  # New field to mark if module is a template
+
+    # Relationship with courses - modules contain multiple courses
+    courses = db.relationship('Course', backref='module', lazy='dynamic')
+    # Relationship with module data entries - modules contain multiple data entries
+    data_entries = db.relationship('ModuleData', backref='module', lazy='dynamic', cascade='all, delete-orphan')
+
+# ModuleData model - for multiple data entries within a module
+class ModuleData(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    module_id = db.Column(db.Integer, db.ForeignKey('module.id'), nullable=False)
     title = db.Column(db.String(200), nullable=True)
-    description = db.Column(db.Text, nullable=True)
     content = db.Column(db.Text, nullable=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)  # Changed to nullable=True
-    order = db.Column(db.Integer, nullable=True)  # Changed to nullable=True since it depends on course
     additional_resources = db.Column(db.String(200), nullable=True)
     media_file = db.Column(db.String(200), nullable=True)
-    is_template = db.Column(db.Boolean, default=True)  # New field to mark if module is a template
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)
+    order = db.Column(db.Integer, nullable=True)  # Order within the module
+    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+    # Relationship with course
+    course = db.relationship('Course', backref='module_data_entries')
 
 # CourseCategory model
 class CourseCategory(db.Model):
@@ -277,95 +391,177 @@ def create_course():
                 db.session.flush()
 
         # Get request data
-        data = request.get_json()
+        data = request.get_json() if request.is_json else request.form
 
-        # Validate required fields
-        required_fields = ['titles', 'course_name', 'content', 'price', 'categories']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+        # Support two formats: titles array or courses array
+        courses_to_create = []
+
+        if 'courses' in data:
+            # Format 1: Array of course objects (different content per course)
+            if not isinstance(data['courses'], list) or len(data['courses']) == 0:
+                return jsonify({'error': 'Courses must be a non-empty array'}), 400
+
+            for index, course_data in enumerate(data['courses']):
+                # Validate required fields for each course
+                required_course_fields = ['title', 'course_name', 'content', 'price']
+                for field in required_course_fields:
+                    if field not in course_data:
+                        return jsonify({'error': f'Missing required field in course {index + 1}: {field}'}), 400
+
+                course_info = {
+                    'title': course_data['title'],
+                    'course_name': course_data['course_name'],
+                    'content': course_data['content'],
+                    'price': course_data['price'],
+                    'brief': course_data.get('brief'),
+                    'course_type': course_data.get('course_type'),
+                    'additional_resources': course_data.get('additional_resources'),
+                    'image': course_data.get('image') or data.get('image'),
+                    'video': course_data.get('video') or data.get('video'),
+                    'module_id': course_data.get('module_id') or data.get('module_id'),
+                    'order': course_data.get('order', index + 1)
+                }
+                courses_to_create.append(course_info)
+
+            # Categories can be at root level for courses array
+            if 'categories' not in data:
+                return jsonify({'error': 'Categories field is required'}), 400
+
+        elif 'titles' in data:
+            # Format 2: Titles array (same content for all courses)
+            required_fields = ['titles', 'course_name', 'content', 'price', 'categories']
+            for field in required_fields:
+                if field not in data:
+                    return jsonify({'error': f'Missing required field: {field}'}), 400
+
+            if isinstance(data['titles'], list):
+                # Multiple courses (array of titles)
+                for index, title in enumerate(data['titles']):
+                    course_data = {
+                        'title': title,
+                        'course_name': data['course_name'],
+                        'content': data['content'],
+                        'price': data['price'],
+                        'brief': data.get('brief'),
+                        'course_type': data.get('course_type'),
+                        'additional_resources': data.get('additional_resources'),
+                        'image': data.get('image'),
+                        'video': data.get('video'),
+                        'module_id': data.get('module_id'),
+                        'order': data.get('order', index + 1) if data.get('module_id') else None
+                    }
+                    courses_to_create.append(course_data)
+            else:
+                # Single course (backward compatibility)
+                course_data = {
+                    'title': data['titles'],
+                    'course_name': data['course_name'],
+                    'content': data['content'],
+                    'price': data['price'],
+                    'brief': data.get('brief'),
+                    'course_type': data.get('course_type'),
+                    'additional_resources': data.get('additional_resources'),
+                    'image': data.get('image'),
+                    'video': data.get('video'),
+                    'module_id': data.get('module_id'),
+                    'order': data.get('order')
+                }
+                courses_to_create.append(course_data)
+        else:
+            return jsonify({'error': 'Either "titles" or "courses" field is required'}), 400
 
         # Validate categories
-        if not data['categories'] or not isinstance(data['categories'], list):
+        if not data.get('categories') or not isinstance(data['categories'], list):
             return jsonify({'error': 'Categories must be a non-empty list'}), 400
 
-        # Create new course
-        course = Course(
-            title=data['titles'],  # Now accepts array of titles
-            course_name=data['course_name'],
-            content=data['content'],
-            price=data['price'],
-            brief=data.get('brief'),
-            course_type=data.get('course_type'),
-            additional_resources=data.get('additional_resources'),
-            author_id=admin.id if admin else instructor.id,  # Set the actual admin/instructor ID
-            instructor_id=instructor.id if instructor else None,
-            is_admin_author=True if admin else False  # Flag to identify admin authors
-        )
+        created_courses = []
 
-        # Handle image upload if provided
-        if 'image' in request.files:
-            image = request.files['image']
-            if image and allowed_file(image.filename):
-                filename = secure_filename(image.filename)
-                image_path = os.path.join(app.config['UPLOAD_FOLDER'], 'courses', filename)
-                os.makedirs(os.path.dirname(image_path), exist_ok=True)
-                image.save(image_path)
-                course.image = f'courses/{filename}'
+        for course_data in courses_to_create:
+            # Ensure title is always stored as an array
+            title = course_data['title']
+            if not isinstance(title, list):
+                title = [title]
 
-        # Handle video upload if provided
-        if 'video' in request.files:
-            video = request.files['video']
-            if video and allowed_file(video.filename):
-                filename = secure_filename(video.filename)
-                video_path = os.path.join(app.config['UPLOAD_FOLDER'], 'courses', filename)
-                os.makedirs(os.path.dirname(video_path), exist_ok=True)
-                video.save(video_path)
-                course.video = f'courses/{filename}'
+            course = Course(
+                title=title,
+                course_name=course_data['course_name'],
+                content=course_data['content'],
+                price=course_data['price'],
+                brief=course_data.get('brief'),
+                course_type=course_data.get('course_type'),
+                additional_resources=course_data.get('additional_resources'),
+                image=course_data.get('image'),
+                video=course_data.get('video'),
+                author_id=admin.id if admin else instructor.id,
+                instructor_id=instructor.id if instructor else None,
+                is_admin_author=True if admin else False,
+                module_id=course_data.get('module_id'),
+                order=course_data.get('order'),
+                status='published'
+            )
 
-        # Handle categories if provided
-        if 'categories' in data:
-            for category_name in data['categories']:
-                category = CourseCategory.query.filter_by(name=category_name).first()
-                if not category:
-                    # Create category if it doesn't exist
-                    category = CourseCategory(name=category_name)
-                    db.session.add(category)
-                    db.session.flush()
-                course.categories.append(category)
+            created_courses.append(course)
 
-        # Handle modules if provided
-        if 'module_ids' in data:
-            module_ids = data['module_ids']
-            for index, module_id in enumerate(module_ids):
-                module = Module.query.get(module_id)
-                if module and module.is_template:
-                    new_module = Module(
-                        name=module.name,
-                        title=module.title,
-                        description=module.description,
-                        content=module.content,
-                        course_id=course.id,
-                        order=index,
-                        additional_resources=module.additional_resources,
-                        media_file=module.media_file,
-                        is_template=False
-                    )
-                    db.session.add(new_module)
-                elif module:
-                    module.course_id = course.id
-                    module.order = index
-                    module.is_template = False
+        # Process each course
+        final_courses = []
 
-        # Update number of modules
-        course.number_of_modules = len(data.get('module_ids', []))
+        for course in created_courses:
+            # Enforce Cloudinary-only URLs if provided in JSON
+            if course.image and not is_cloudinary_url(course.image):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for image'}), 400
+            if course.video and not is_cloudinary_url(course.video):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for video'}), 400
+            if course.additional_resources and not is_cloudinary_url(course.additional_resources):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for additional_resources'}), 400
 
-        db.session.add(course)
+            # Handle image upload (Cloudinary) if provided and no URL already set
+            if 'image' in request.files and not (course.image and isinstance(course.image, str) and (course.image.startswith('http://') or course.image.startswith('https://'))):
+                image = request.files['image']
+                if image and allowed_image(image.filename):
+                    try:
+                        image_url = upload_to_cloudinary(image, folder='courses', resource_type='image')
+                        course.image = image_url
+                    except Exception as e:
+                        app.logger.error(f"Cloudinary image upload failed: {str(e)}")
+
+            # Handle video upload (Cloudinary) if provided and no URL already set
+            if 'video' in request.files and not (course.video and isinstance(course.video, str) and (course.video.startswith('http://') or course.video.startswith('https://'))):
+                video = request.files['video']
+                if video and allowed_video(video.filename):
+                    try:
+                        video_url = upload_to_cloudinary(video, folder='course_videos', resource_type='video')
+                        course.video = video_url
+                    except Exception as e:
+                        app.logger.error(f"Cloudinary video upload failed: {str(e)}")
+
+            # Handle categories if provided
+            if 'categories' in data:
+                for category_name in data['categories']:
+                    category = CourseCategory.query.filter_by(name=category_name).first()
+                    if not category:
+                        # Create category if it doesn't exist
+                        category = CourseCategory(name=category_name)
+                        db.session.add(category)
+                        db.session.flush()
+                    course.categories.append(category)
+
+            db.session.add(course)
+            db.session.flush()  # Get course ID
+
+            final_courses.append({
+                'id': course.id,
+                'title': course.get_all_titles(),  # Return full title array
+                'course_name': course.course_name,
+                'module_id': course.module_id,
+                'order': course.order
+            })
+
         db.session.commit()
 
         return jsonify({
-            'message': 'Course created successfully',
-            'course_id': course.id
+            'message': f'Successfully created {len(final_courses)} course(s)',
+            'courses': final_courses,
+            'total_courses': len(final_courses)
         }), 201
 
     except Exception as e:
@@ -411,25 +607,182 @@ def get_courses():
             )
         )
     
+    # Order by most recent first so new courses show on page 1
+    query = query.order_by(Course.date_created.desc(), Course.id.desc())
+
     # Get paginated results
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     courses = pagination.items
     
     courses_data = []
     for course in courses:
+        # Determine module information (direct or inferred via ModuleData)
+        module_data = None
+        target_module = None
+        if course.module_id:
+            target_module = db.session.get(Module, course.module_id)
+        if not target_module:
+            md = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).first()
+            if md:
+                target_module = db.session.get(Module, md.module_id)
+        if target_module:
+            # Build module's data_entries in the same format as creation response
+            module_entries_template = ModuleData.query.filter_by(module_id=target_module.id).order_by(ModuleData.order).all()
+            module_data_entries = [
+                {
+                    'id': de.id,
+                    'title': de.title,
+                    'content': de.content,
+                    'additional_resources': build_media_url(de.additional_resources),
+                    'media_file': build_media_url(de.media_file),
+                    'course_id': de.course_id,
+                    'order': de.order
+                }
+                for de in module_entries_template
+            ]
+
+            module_data = {
+                'id': target_module.id,
+                'name': target_module.name,
+                'description': target_module.description,
+                'order': target_module.order,
+                'is_template': target_module.is_template,
+                'data_entries': module_data_entries,
+                'data_count': len(module_data_entries)
+            }
+
+        # Gather ModuleData entries (modules/lessons for this course). If none exist,
+        # fall back to module template entries using course.module_id.
+        md_entries = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).all()
+        if not md_entries and course.module_id:
+            md_entries = ModuleData.query.filter_by(module_id=course.module_id).order_by(ModuleData.order).all()
+        md_count = len(md_entries)
+        modules_array = [
+            {
+                'id': md.id,
+                'title': md.title,
+                'content': md.content,
+                'additional_resources': build_media_url(md.additional_resources),
+                'media_file': build_media_url(md.media_file),
+                'order': md.order,
+                'module_id': md.module_id
+            }
+            for md in md_entries
+        ]
+
+        # Build new modules structure: group ModuleData by module for this course
+        modules_map = {}
+        md_for_course = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.module_id, ModuleData.order).all()
+        for mde in md_for_course:
+            mod = db.session.get(Module, mde.module_id) if mde.module_id else None
+            key = mde.module_id if mde.module_id else 0
+            if key not in modules_map:
+                modules_map[key] = {
+                    'id': mod.id if mod else None,
+                    'name': mod.name if mod else None,
+                    'description': mod.description if mod else None,
+                    'order': mod.order if mod else None,
+                    'is_template': mod.is_template if mod else False,
+                    'data': []
+                }
+            modules_map[key]['data'].append({
+                'title': mde.title,
+                'content': mde.content,
+                'additional_resources': build_media_url(mde.additional_resources),
+                'media_file': build_media_url(mde.media_file),
+                'course_id': mde.course_id,
+                'order': mde.order
+            })
+
+        # Fallback: include template module data when no course-specific data exists
+        if not modules_map and course.module_id:
+            tm = db.session.get(Module, course.module_id)
+            if tm:
+                template_entries = ModuleData.query.filter_by(module_id=tm.id).order_by(ModuleData.order).all()
+                modules_map[tm.id] = {
+                    'id': tm.id,
+                    'name': tm.name,
+                    'description': tm.description,
+                    'order': tm.order,
+                    'is_template': tm.is_template,
+                    'data': [{
+                        'title': te.title,
+                        'content': te.content,
+                        'additional_resources': build_media_url(te.additional_resources),
+                        'media_file': build_media_url(te.media_file),
+                        'course_id': te.course_id,
+                        'order': te.order
+                    } for te in template_entries]
+                }
+
+        modules_list_resp = list(modules_map.values())
+
+
+        # Build new modules structure: group ModuleData by module for this course
+        modules_map = {}
+        md_for_course = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.module_id, ModuleData.order).all()
+        for mde in md_for_course:
+            mod = db.session.get(Module, mde.module_id) if mde.module_id else None
+            key = mde.module_id if mde.module_id else 0
+            if key not in modules_map:
+                modules_map[key] = {
+                    'id': mod.id if mod else None,
+                    'name': mod.name if mod else None,
+                    'description': mod.description if mod else None,
+                    'order': mod.order if mod else None,
+                    'is_template': mod.is_template if mod else False,
+                    'data': []
+                }
+            modules_map[key]['data'].append({
+                'title': mde.title,
+                'content': mde.content,
+                'additional_resources': build_media_url(mde.additional_resources),
+                'media_file': build_media_url(mde.media_file),
+                'course_id': mde.course_id,
+                'order': mde.order
+            })
+
+        # Fallback: if no course-specific ModuleData but course has a module, include its template entries
+        if not modules_map and course.module_id:
+            tm = db.session.get(Module, course.module_id)
+            if tm:
+                template_entries = ModuleData.query.filter_by(module_id=tm.id).order_by(ModuleData.order).all()
+                modules_map[tm.id] = {
+                    'id': tm.id,
+                    'name': tm.name,
+                    'description': tm.description,
+                    'order': tm.order,
+                    'is_template': tm.is_template,
+                    'data': [{
+                        'title': te.title,
+                        'content': te.content,
+                        'additional_resources': build_media_url(te.additional_resources),
+                        'media_file': build_media_url(te.media_file),
+                        'course_id': te.course_id,
+                        'order': te.order
+                    } for te in template_entries]
+                }
+
+        modules_list_resp = list(modules_map.values())
+
         course_dict = {
             'id': course.id,
-            'title': course.title,
+            'title': course.get_all_titles(),  # Return full title array
             'course_name': course.course_name,
-            'image': course.image,
+            'image': build_media_url(course.image),
             'content': course.content,
-            'video': course.video,
+            'video': build_media_url(course.video),
             'brief': course.brief,
-            'number_of_modules': course.number_of_modules,
+            'module_entries_count': md_count,
             'course_type': course.course_type,
             'price': course.price,
             'status': course.status,
-            'additional_resources': course.additional_resources,
+            'additional_resources': build_media_url(course.additional_resources),
+            'module': module_data,
+            'has_module': True if module_data else False,
+            'module_entries': modules_array,
+            'modules': modules_list_resp,
+            'module_id': course.module_id,
             'date_created': course.date_created.isoformat() if course.date_created else None,
             'last_updated': course.last_updated.isoformat() if course.last_updated else None,
             'categories': [category.name for category in course.categories],
@@ -485,35 +838,143 @@ def get_course(course_id):
     if not course:
         return jsonify({'error': 'Course not found'}), 404
 
-    # Get detailed module information
-    modules_data = [{
-        'id': module.id,
-        'name': module.name,
-        'title': module.title,
-        'description': module.description,
-        'content': module.content,
-        'order': module.order,
-        'media_file': module.media_file,
-        'additional_resources': module.additional_resources
-    } for module in course.modules.order_by(Module.order)]
+    # Get module information if course belongs to a module
+    module_data = None
+    target_module = None
+    if course.module_id:
+        target_module = Module.query.get(course.module_id)
+    # Fallback: infer module via ModuleData if module_id is null
+    if not target_module:
+        md = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).first()
+        if md:
+            target_module = Module.query.get(md.module_id)
+    if target_module:
+        # Get other courses in the same module
+        other_courses = Course.query.filter(
+            Course.module_id == target_module.id,
+            Course.id != course.id
+        ).order_by(Course.order).all()
+
+        # Build module's data_entries in the same format as creation response
+        module_entries_template = ModuleData.query.filter_by(module_id=target_module.id).order_by(ModuleData.order).all()
+        module_data_entries = [
+            {
+                'id': de.id,
+                'title': de.title,
+                'content': de.content,
+                'additional_resources': build_media_url(de.additional_resources),
+                'media_file': build_media_url(de.media_file),
+                'course_id': de.course_id,
+                'order': de.order
+            }
+            for de in module_entries_template
+        ]
+
+        module_data = {
+            'id': target_module.id,
+            'name': target_module.name,
+            'description': target_module.description,
+            'order': target_module.order,
+            'is_template': target_module.is_template,
+            'data_entries': module_data_entries,
+            'data_count': len(module_data_entries),
+            'other_courses': [{
+                'id': other_course.id,
+                'title': other_course.get_all_titles(),  # Return full title array
+                'course_name': other_course.course_name,
+                'order': other_course.order,
+                'price': other_course.price
+            } for other_course in other_courses]
+        }
+
+    # Gather ModuleData entries (modules/lessons for this course). If none exist,
+    # fall back to module template entries using course.module_id so the response
+    # is not empty when a course is linked to a module template.
+    md_entries = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).all()
+    if not md_entries and course.module_id:
+        md_entries = ModuleData.query.filter_by(module_id=course.module_id).order_by(ModuleData.order).all()
+    modules_array = [
+        {
+            'id': md.id,
+            'title': md.title,
+            'content': md.content,
+            'additional_resources': build_media_url(md.additional_resources),
+            'media_file': build_media_url(md.media_file),
+            'order': md.order,
+            'module_id': md.module_id
+        }
+        for md in md_entries
+    ]
+
+    # Build new modules structure for single-course response
+    modules_map = {}
+    md_for_course = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.module_id, ModuleData.order).all()
+    for mde in md_for_course:
+        mod = db.session.get(Module, mde.module_id) if mde.module_id else None
+        key = mde.module_id if mde.module_id else 0
+        if key not in modules_map:
+            modules_map[key] = {
+                'id': mod.id if mod else None,
+                'name': mod.name if mod else None,
+                'description': mod.description if mod else None,
+                'order': mod.order if mod else None,
+                'is_template': mod.is_template if mod else False,
+                'data': []
+            }
+        modules_map[key]['data'].append({
+            'title': mde.title,
+            'content': mde.content,
+            'additional_resources': build_media_url(mde.additional_resources),
+            'media_file': build_media_url(mde.media_file),
+            'course_id': mde.course_id,
+            'order': mde.order
+        })
+
+    # Fallback to module template entries when no course-specific entries
+    if not modules_map and course.module_id:
+        tm = Module.query.get(course.module_id)
+        if tm:
+            template_entries = ModuleData.query.filter_by(module_id=tm.id).order_by(ModuleData.order).all()
+            modules_map[tm.id] = {
+                'id': tm.id,
+                'name': tm.name,
+                'description': tm.description,
+                'order': tm.order,
+                'is_template': tm.is_template,
+                'data': [{
+                    'title': te.title,
+                    'content': te.content,
+                    'additional_resources': build_media_url(te.additional_resources),
+                    'media_file': build_media_url(te.media_file),
+                    'course_id': te.course_id,
+                    'order': te.order
+                } for te in template_entries]
+            }
+
+    modules_list_resp = list(modules_map.values())
 
     course_data = {
         'id': course.id,
-        'title': course.title,
+        'title': course.get_all_titles(),  # Return full title array
         'course_name': course.course_name,
-        'image': course.image,
+        'image': build_media_url(course.image),
         'content': course.content,
-        'video': course.video,
+        'video': build_media_url(course.video),
         'brief': course.brief,
-        'number_of_modules': course.number_of_modules,
+        'module_entries_count': len(modules_array),
         'course_type': course.course_type,
         'price': course.price,
         'status': course.status,
-        'additional_resources': course.additional_resources,
+        'additional_resources': build_media_url(course.additional_resources),
+        'module_id': course.module_id,
+        'order': course.order,
         'date_created': course.date_created.isoformat() if course.date_created else None,
         'last_updated': course.last_updated.isoformat() if course.last_updated else None,
         'categories': [category.name for category in course.categories],
-        'modules': modules_data,
+        'module': module_data,
+        'has_module': True if module_data else False,
+        'module_entries': modules_array,
+        'modules': modules_list_resp,
         'student_count': course.student_count
     }
 
@@ -563,12 +1024,17 @@ def update_course(course_id):
         if course.author_id != user_id:
             return jsonify({'error': 'Unauthorized to update this course'}), 403
 
-        # Handle form data and files
-        data = request.form
+        # Handle JSON or form data and files
+        data = request.get_json() if request.is_json else request.form
         files = request.files
 
         # Update basic course information
-        if data.get('course_title'): course.title = data.get('course_title')
+        if data.get('course_title'):
+            title = data.get('course_title')
+            # Ensure title is always stored as an array
+            if not isinstance(title, list):
+                title = [title]
+            course.title = title
         if data.get('course_name'): course.course_name = data.get('course_name')
         if data.get('body'): course.content = data.get('body')
         if data.get('brief'): course.brief = data.get('brief')
@@ -576,27 +1042,54 @@ def update_course(course_id):
         if data.get('price'): course.price = float(data.get('price'))
         if data.get('status'): course.status = data.get('status')
 
-        # Handle file uploads
-        if 'image' in files:
+        # First, allow providing URLs for media (these take precedence over files)
+        image_url = data.get('image_url') or data.get('image')
+        if image_url:
+            course.image = image_url
+
+        video_url = data.get('video_url') or data.get('video')
+        if video_url:
+            course.video = video_url
+
+        addl_res_url = data.get('additional_resources_url') or data.get('additional_resources')
+        if addl_res_url and (isinstance(addl_res_url, str) and (addl_res_url.startswith('http://') or addl_res_url.startswith('https://') or addl_res_url.startswith('uploads/') or addl_res_url.startswith('courses/'))):
+            course.additional_resources = addl_res_url
+
+        # Validate Cloudinary-only URLs provided directly
+        if image_url and not is_cloudinary_url(image_url):
+            return jsonify({'error': 'Only Cloudinary URLs are allowed for image'}), 400
+        if video_url and not is_cloudinary_url(video_url):
+            return jsonify({'error': 'Only Cloudinary URLs are allowed for video'}), 400
+        if addl_res_url and not is_cloudinary_url(addl_res_url):
+            return jsonify({'error': 'Only Cloudinary URLs are allowed for additional_resources'}), 400
+
+        # Handle file uploads with Cloudinary (only if corresponding URL not provided above)
+        if 'image' in files and not image_url:
             image_file = files['image']
-            if image_file and allowed_file(image_file.filename):
-                filename = secure_filename(image_file.filename)
-                image_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                course.image = filename
+            if image_file and allowed_image(image_file.filename):
+                try:
+                    image_url_uploaded = upload_to_cloudinary(image_file, folder='courses', resource_type='image')
+                    course.image = image_url_uploaded
+                except Exception as e:
+                    app.logger.error(f"Cloudinary image upload failed: {str(e)}")
 
-        if 'video' in files:
+        if 'video' in files and not video_url:
             video_file = files['video']
-            if video_file and allowed_file(video_file.filename):
-                filename = secure_filename(video_file.filename)
-                video_file.save(os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename))
-                course.video = os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename)
+            if video_file and allowed_video(video_file.filename):
+                try:
+                    video_url_uploaded = upload_to_cloudinary(video_file, folder='course_videos', resource_type='video')
+                    course.video = video_url_uploaded
+                except Exception as e:
+                    app.logger.error(f"Cloudinary video upload failed: {str(e)}")
 
-        if 'additional_resources' in files:
+        if 'additional_resources' in files and not (addl_res_url):
             resources_file = files['additional_resources']
-            if resources_file and allowed_file(resources_file.filename):
-                filename = secure_filename(resources_file.filename)
-                resources_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'resources', filename))
-                course.additional_resources = os.path.join('resources', filename)
+            if resources_file and (allowed_doc(resources_file.filename) or allowed_image(resources_file.filename) or allowed_video(resources_file.filename)):
+                try:
+                    res_url_uploaded = upload_to_cloudinary(resources_file, folder='courses/resources', resource_type='auto')
+                    course.additional_resources = res_url_uploaded
+                except Exception as e:
+                    app.logger.error(f"Cloudinary additional resource upload failed: {str(e)}")
 
         # Update categories if provided
         if data.get('course_category'):
@@ -604,71 +1097,32 @@ def update_course(course_id):
             category_name = data.get('course_category')
             category = CourseCategory.query.filter_by(name=category_name).first()
             if not category:
+                # Create category if it doesn't exist
                 category = CourseCategory(name=category_name)
                 db.session.add(category)
             course.categories.append(category)
 
-        # Update modules if provided
-        if data.get('modules'):
-            modules_data = json.loads(data.get('modules'))
-            
-            # Store existing module IDs to track deletions
-            existing_module_ids = set(module.id for module in course.modules)
-            updated_module_ids = set()
+        # Update module assignment if provided
+        if data.get('module_id'):
+            new_module_id = int(data.get('module_id'))
+            # Verify module exists
+            module = Module.query.get(new_module_id)
+            if not module:
+                return jsonify({'error': 'Module not found'}), 404
 
-            for module_data in modules_data:
-                module_id = module_data.get('id')
-                
-                if module_id:  # Update existing module
-                    module = Module.query.get(module_id)
-                    if module and module.course_id == course.id:
-                        module.name = module_data.get('name', module.name)
-                        module.title = module_data.get('title', module.title)
-                        module.description = module_data.get('description', module.description)
-                        module.content = module_data.get('content', module.content)
-                        module.order = module_data.get('order', module.order)
-                        updated_module_ids.add(module_id)
-                else:  # Create new module
-                    module = Module(
-                        name=module_data.get('name'),
-                        title=module_data.get('title'),
-                        description=module_data.get('description'),
-                        content=module_data.get('content'),
-                        course_id=course.id,
-                        order=module_data.get('order', 1)
-                    )
-                    db.session.add(module)
-                    
-                # Handle module files
-                module_order = module_data.get('order', 1)
-                
-                # Handle module media file
-                module_file_key = f"module_{module_order}_media"
-                if module_file_key in files:
-                    media_file = files[module_file_key]
-                    if media_file and allowed_file(media_file.filename):
-                        filename = secure_filename(media_file.filename)
-                        media_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', filename))
-                        module.media_file = os.path.join('modules', filename)
+            # If moving to a different module, update order
+            if course.module_id != new_module_id:
+                # Get highest order in the new module
+                highest_order = db.session.query(func.max(Course.order)).filter(Course.module_id == new_module_id).scalar()
+                next_order = 1 if highest_order is None else highest_order + 1
 
-                # Handle module resources
-                module_resources_key = f"module_{module_order}_resources"
-                if module_resources_key in files:
-                    resources_file = files[module_resources_key]
-                    if resources_file and allowed_file(resources_file.filename):
-                        filename = secure_filename(resources_file.filename)
-                        resources_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', 'resources', filename))
-                        module.additional_resources = os.path.join('modules', 'resources', filename)
+                course.module_id = new_module_id
+                course.order = next_order
 
-            # Delete modules that weren't updated
-            modules_to_delete = existing_module_ids - updated_module_ids
-            for module_id in modules_to_delete:
-                module = Module.query.get(module_id)
-                if module:
-                    db.session.delete(module)
-
-            # Update course's number of modules
-            course.number_of_modules = len(modules_data)
+        # Update order within current module if provided
+        if data.get('order') and course.module_id:
+            new_order = int(data.get('order'))
+            course.order = new_order
 
         db.session.commit()
         return jsonify({'message': 'Course updated successfully'}), 200
@@ -679,42 +1133,30 @@ def update_course(course_id):
 
 
 # Delete a course
-    @app.route('/courses/<int:course_id>', methods=['DELETE'])
-    @jwt_required()
-    def delete_course(course_id):
-     user_id = get_jwt_identity()
-    
+@app.route('/courses/<int:course_id>', methods=['DELETE'])
+@jwt_required()
+def delete_course(course_id):
+    user_id = get_jwt_identity()
     course = Course.query.get(course_id)
     if not course:
         return jsonify({'error': 'Course not found'}), 404
-    
-    # Check if the current user is the author of the course
     if course.author_id != user_id:
         return jsonify({'error': 'Unauthorized to delete this course'}), 403
-
     try:
         # Remove all enrollments for this course
-        for enrollment in course.enrollments:
-            db.session.delete(enrollment)
-        
-        # Remove all modules associated with this course
-        for module in course.modules:
-            db.session.delete(module)
-        
+        course.enrolled_users = []
         # Remove all category associations
         course.categories = []
-        
+        # Note: We don't delete modules since they can contain multiple courses
         # Delete the course
         db.session.delete(course)
         db.session.commit()
-        
         return jsonify({'message': 'Course deleted successfully'}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Failed to delete course: {str(e)}'}), 500
- 
-  
-  # Create a new category
+
+# Create a new category
 @app.route('/categories', methods=['POST'])
 @jwt_required()
 def create_category():
@@ -790,67 +1232,166 @@ def delete_category(category_id):
     return jsonify({'message': 'Category deleted successfully'}), 200
 
 
-# Create a new module
+# Create modules (single or array for admin)
 @app.route('/modules', methods=['POST'])
 @jwt_required()
-def create_module():
+def create_modules():
     try:
+        # Get current user from token
+        current_user_id = get_jwt_identity()
+
+        # Check if user is admin or instructor
+        admin = Admin.query.filter_by(id=current_user_id).first()
+        instructor = Instructor.query.filter_by(id=current_user_id).first()
+
+        if not admin and not instructor:
+            return jsonify({'error': 'Only admins and instructors can create modules'}), 403
+
         # Handle both form-data and JSON requests
         if request.is_json:
             data = request.get_json()
         else:
             data = request.form
 
-        # Validate required fields
-        if not data.get('name'):
-            return jsonify({'error': 'Module name is required'}), 400
+        # Support multiple formats for module creation (similar to course creation)
+        modules_to_create = []
 
-        # Create module
-        module = Module(
-            name=data.get('name'),
-            title=data.get('title'),
-            description=data.get('description'),
-            content=data.get('content'),
-            is_template=True  # Set as template by default
-        )
+        if 'modules' in data:
+            # Format 1: Array of module objects (different content per module)
+            if not isinstance(data['modules'], list) or len(data['modules']) == 0:
+                return jsonify({'error': 'Modules must be a non-empty array'}), 400
 
-        # If course_id is provided, associate with course
-        course_id = data.get('course_id')
-        if course_id:
-            course = Course.query.get(course_id)
-            if not course:
-                return jsonify({'error': 'Course not found'}), 404
-            module.course_id = course_id
-            module.is_template = False
-            # Get highest order for the course
-            highest_order = db.session.query(func.max(Module.order)).filter(Module.course_id == course_id).scalar()
-            module.order = 1 if highest_order is None else highest_order + 1
+            for module_index, module_data in enumerate(data['modules']):
+                # Validate required fields for each module
+                if not module_data.get('name'):
+                    return jsonify({'error': f'Module {module_index + 1}: name is required'}), 400
 
-        # Handle file uploads
+                module_info = {
+                    'name': module_data.get('name'),
+                    'description': module_data.get('description'),
+                    'order': module_data.get('order', module_index + 1),
+                    'is_template': module_data.get('is_template', True),
+                    'data': module_data.get('data', [])  # Array of data entries
+                }
+                modules_to_create.append(module_info)
+
+        elif 'names' in data:
+            # Format 2: Names array (same content for all modules, similar to titles array in courses)
+            required_fields = ['names']
+            for field in required_fields:
+                if field not in data:
+                    return jsonify({'error': f'Missing required field: {field}'}), 400
+
+            if isinstance(data['names'], list):
+                # Multiple modules (array of names)
+                for index, name in enumerate(data['names']):
+                    module_data = {
+                        'name': name,
+                        'description': data.get('description'),
+                        'order': data.get('order', index + 1),
+                        'is_template': data.get('is_template', True),
+                        'data': data.get('data', [])  # Shared data entries for all modules
+                    }
+                    modules_to_create.append(module_data)
+            else:
+                # Single module (backward compatibility)
+                module_data = {
+                    'name': data['names'],
+                    'description': data.get('description'),
+                    'order': data.get('order'),
+                    'is_template': data.get('is_template', True),
+                    'data': data.get('data', [])
+                }
+                modules_to_create.append(module_data)
+
+        elif 'name' in data:
+            # Format 3: Single module creation (backward compatibility)
+            if not data.get('name'):
+                return jsonify({'error': 'Module name is required'}), 400
+
+            module_data = {
+                'name': data.get('name'),
+                'description': data.get('description'),
+                'order': data.get('order'),
+                'is_template': data.get('is_template', True),
+                'data': data.get('data', [])  # Array of data entries
+            }
+            modules_to_create.append(module_data)
+        else:
+            return jsonify({'error': 'Either "modules", "names", or "name" field is required'}), 400
+
+        # Create all modules
+        created_modules = []
+
+        for module_data in modules_to_create:
+            # Create module
+            module = Module(
+                name=module_data['name'],
+                description=module_data.get('description'),
+                order=module_data.get('order'),
+                is_template=module_data.get('is_template', True)
+            )
+
+            created_modules.append(module)
+
+        # Process each module and create data entries
+        final_modules = []
         files = request.files if not request.is_json else {}
 
-        # Handle module media file
-        if 'media_file' in files:
-            media_file = files['media_file']
-            if media_file and allowed_file(media_file.filename):
-                filename = secure_filename(media_file.filename)
-                media_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', filename))
-                module.media_file = os.path.join('modules', filename)
+        for index, (module, module_data) in enumerate(zip(created_modules, modules_to_create)):
+            db.session.add(module)
+            db.session.flush()  # Get module ID
 
-        # Handle additional resources
-        if 'additional_resources' in files:
-            resources_file = files['additional_resources']
-            if resources_file and allowed_file(resources_file.filename):
-                filename = secure_filename(resources_file.filename)
-                resources_file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'modules', 'resources', filename))
-                module.additional_resources = os.path.join('modules', 'resources', filename)
+            # Create ModuleData entries for this module
+            data_entries = []
+            if 'data' in module_data and isinstance(module_data['data'], list):
+                for data_index, data_entry in enumerate(module_data['data']):
+                    # Validate data entry (JSON-only Cloudinary URLs)
+                    module_data_entry = ModuleData(
+                        module_id=module.id,
+                        title=data_entry.get('title'),
+                        content=data_entry.get('content'),
+                        additional_resources=data_entry.get('additional_resources'),
+                        media_file=data_entry.get('media_file'),
+                        course_id=data_entry.get('course_id'),
+                        order=data_entry.get('order', data_index + 1)
+                    )
 
-        db.session.add(module)
+                    # Enforce Cloudinary URLs
+                    if module_data_entry.media_file and not is_cloudinary_url(module_data_entry.media_file):
+                        return jsonify({'error': 'Only Cloudinary URLs are allowed for module media_file'}), 400
+                    if module_data_entry.additional_resources and not is_cloudinary_url(module_data_entry.additional_resources):
+                        return jsonify({'error': 'Only Cloudinary URLs are allowed for module additional_resources'}), 400
+
+                    db.session.add(module_data_entry)
+                    db.session.flush()  # Get data entry ID
+
+                    data_entries.append({
+                        'id': module_data_entry.id,
+                        'title': module_data_entry.title,
+                        'content': module_data_entry.content,
+                        'additional_resources': module_data_entry.additional_resources,
+                        'media_file': module_data_entry.media_file,
+                        'course_id': module_data_entry.course_id,
+                        'order': module_data_entry.order
+                    })
+
+            final_modules.append({
+                'id': module.id,
+                'name': module.name,
+                'description': module.description,
+                'order': module.order,
+                'is_template': module.is_template,
+                'data_entries': data_entries,
+                'data_count': len(data_entries)
+            })
+
         db.session.commit()
 
         return jsonify({
-            'message': 'Module created successfully',
-            'module_id': module.id
+            'message': f'Successfully created {len(final_modules)} module(s)',
+            'modules': final_modules,
+            'total_modules': len(final_modules)
         }), 201
 
     except Exception as e:
@@ -865,41 +1406,51 @@ def get_modules():
     per_page = request.args.get('per_page', 10, type=int)
     
     # Get filter parameters
-    course_id = request.args.get('course_id', type=int)
     search_keyword = request.args.get('search')
-    
+
     # Build query
     query = Module.query
-    
+
     # Apply filters
-    if course_id:
-        query = query.filter(Module.course_id == course_id)
     if search_keyword:
         search = f"%{search_keyword}%"
         query = query.filter(or_(
             Module.name.ilike(search),
-            Module.title.ilike(search),
             Module.description.ilike(search)
         ))
-    
+
+    # Order by most recent first so new modules show on the first page
+    query = query.order_by(Module.id.desc())
+
     # Get paginated modules
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     modules = pagination.items
-    
+
     modules_data = [{
         'id': module.id,
         'name': module.name,
-        'title': module.title,
         'description': module.description,
-        'content': module.content,
-        'course_id': module.course_id,
         'order': module.order,
-        'additional_resources': module.additional_resources,
-        'media_file': module.media_file,
-        'course': {
-            'id': module.course.id,
-            'title': module.course.title
-        } if module.course else None
+        'is_template': module.is_template,
+        'courses_count': module.courses.count(),
+        'data_entries_count': module.data_entries.count(),
+        'courses': [{
+            'id': course.id,
+            'title': course.get_all_titles(),  # Return full title array
+            'course_name': course.course_name,
+            'price': course.price,
+            'order': course.order
+        } for course in module.courses.order_by(Course.order).limit(3)],  # Show first 3 courses
+        'data': [{
+            'id': data_entry.id,
+            'title': data_entry.title,
+            'content': data_entry.content[:100] + '...' if data_entry.content and len(data_entry.content) > 100 else data_entry.content,
+            'additional_resources': build_media_url(data_entry.additional_resources),
+            'media_file': build_media_url(data_entry.media_file),
+            'module_id': data_entry.module_id,
+            'course_id': data_entry.course_id,
+            'order': data_entry.order
+        } for data_entry in module.data_entries.order_by(ModuleData.order).limit(3)]  # Show first 3 data entries
     } for module in modules]
     
     return jsonify({
@@ -921,11 +1472,43 @@ def update_module(module_id):
         return jsonify({'error': 'Module not found'}), 404
 
     data = request.get_json()
-    name = data.get('name', module.name)
-    course_id = data.get('course_id', module.course_id)
 
-    module.name = name
-    module.course_id = course_id
+    # Update module fields
+    if 'name' in data:
+        module.name = data['name']
+    if 'description' in data:
+        module.description = data['description']
+    if 'order' in data:
+        module.order = data['order']
+    if 'is_template' in data:
+        module.is_template = data['is_template']
+
+    # Handle data entries update
+    if 'data' in data and isinstance(data['data'], list):
+        # Remove existing data entries
+        for existing_entry in module.data_entries:
+            db.session.delete(existing_entry)
+
+        # Create new data entries (JSON-only Cloudinary URLs)
+        for data_index, data_entry in enumerate(data['data']):
+            module_data_entry = ModuleData(
+                module_id=module.id,
+                title=data_entry.get('title'),
+                content=data_entry.get('content'),
+                additional_resources=data_entry.get('additional_resources'),
+                media_file=data_entry.get('media_file'),
+                course_id=data_entry.get('course_id'),
+                order=data_entry.get('order', data_index + 1)
+            )
+
+            # Enforce Cloudinary URLs
+            if module_data_entry.media_file and not is_cloudinary_url(module_data_entry.media_file):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for module media_file'}), 400
+            if module_data_entry.additional_resources and not is_cloudinary_url(module_data_entry.additional_resources):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for module additional_resources'}), 400
+
+            db.session.add(module_data_entry)
+
     db.session.commit()
 
     return jsonify({'message': 'Module updated successfully'}), 200
@@ -937,20 +1520,52 @@ def get_module(module_id):
     if not module:
         return jsonify({'error': 'Module not found'}), 404
 
+    # Get courses within this module
+    courses_data = [{
+        'id': course.id,
+        'title': course.get_all_titles(),  # Return full title array
+        'course_name': course.course_name,
+        'content': course.content,
+        'price': course.price,
+        'brief': course.brief,
+        'course_type': course.course_type,
+        'order': course.order,
+        'status': course.status,
+        'additional_resources': course.additional_resources,
+        'image': build_media_url(course.image),
+        'video': build_media_url(course.video),
+        'date_created': course.date_created.isoformat() if course.date_created else None,
+        'last_updated': course.last_updated.isoformat() if course.last_updated else None,
+        'categories': [category.name for category in course.categories]
+    } for course in module.courses.order_by(Course.order)]
+
+    # Get data entries within this module
+    data_entries = [{
+        'id': data_entry.id,
+        'title': data_entry.title,
+        'content': data_entry.content,
+        'additional_resources': build_media_url(data_entry.additional_resources),
+        'media_file': build_media_url(data_entry.media_file),
+        'course_id': data_entry.course_id,
+        'order': data_entry.order,
+        'date_created': data_entry.date_created.isoformat() if data_entry.date_created else None,
+        'course': {
+            'id': data_entry.course.id,
+            'title': data_entry.course.get_all_titles(),  # Return full title array
+            'course_name': data_entry.course.course_name
+        } if data_entry.course else None
+    } for data_entry in module.data_entries.order_by(ModuleData.order)]
+
     module_data = {
         'id': module.id,
         'name': module.name,
-        'title': module.title,
         'description': module.description,
-        'content': module.content,
-        'course_id': module.course_id,
         'order': module.order,
-        'additional_resources': module.additional_resources,
-        'media_file': module.media_file,
-        'course': {
-            'id': module.course.id,
-            'title': module.course.title
-        } if module.course else None
+        'is_template': module.is_template,
+        'courses': courses_data,
+        'total_courses': len(courses_data),
+        'data': data_entries,
+        'total_data_entries': len(data_entries)
     }
 
     return jsonify(module_data), 200
@@ -990,9 +1605,10 @@ def enroll_in_course(course_id):
     return jsonify({'message': 'Enrolled in the course successfully'}), 200
 
 
-    # Define upload directory for course videos
-COURSE_VIDEO_UPLOAD_FOLDER = 'uploads/course_videos'
-app.config['COURSE_VIDEO_UPLOAD_FOLDER'] = COURSE_VIDEO_UPLOAD_FOLDER
+    # Define upload directory for course videos (under static/uploads)
+    COURSE_VIDEO_UPLOAD_FOLDER = os.path.join(STATIC_UPLOADS_ROOT, COURSE_VIDEOS_SUBDIR)
+    ensure_dir(COURSE_VIDEO_UPLOAD_FOLDER)
+    app.config['COURSE_VIDEO_UPLOAD_FOLDER'] = COURSE_VIDEO_UPLOAD_FOLDER
 
 # Route to handle course video uploads
 @app.route('/upload_course_video/<int:course_id>', methods=['POST'])
@@ -1012,7 +1628,7 @@ def upload_course_video(course_id):
     if file:
         filename = secure_filename(file.filename)
         file.save(os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename))
-        course.video = os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename)
+        course.video = f'uploads/{COURSE_VIDEOS_SUBDIR}/{filename}'
         db.session.commit()
         return jsonify({'message': 'Course video uploaded successfully'}), 200
     else:
@@ -1073,6 +1689,10 @@ def login():
     if not user or not check_password_hash(user.password, password):
         return jsonify({'message': 'Invalid credentials'}), 401
 
+    # Block login for deactivated users; direct them to /reactivate
+    if user.is_active is False:
+        return jsonify({'message': 'Account is deactivated. Use /reactivate to restore access.'}), 403
+
     # Create access token with longer expiration (e.g., 1 hour)
     access_token = create_access_token(identity=user.email, expires_delta=timedelta(hours=1))
     
@@ -1084,13 +1704,131 @@ def login():
         'refresh_token': refresh_token
     }), 200
 
+@app.route('/reactivate', methods=['POST'])
+def reactivate():
+    """
+    Public endpoint to reactivate a deactivated account using credentials.
+    Body: {"email": "...", "password": "..."}
+    Always validates credentials even if user.is_active is False.
+    On success: sets is_active=True and returns fresh tokens.
+    """
+    data = request.get_json() or {}
+    email = data.get('email')
+    password = data.get('password')
+    if not email or not password:
+        return jsonify({'message': 'Email and password are required'}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not check_password_hash(user.password, password):
+        return jsonify({'message': 'Invalid credentials'}), 401
+
+    # Reactivate if needed
+    if not user.is_active:
+        user.is_active = True
+        db.session.commit()
+
+    access_token = create_access_token(identity=user.email, expires_delta=timedelta(hours=1))
+    refresh_token = create_refresh_token(identity=user.email)
+    return jsonify({
+        'message': 'Account reactivated',
+        'is_active': True,
+        'access_token': access_token,
+        'refresh_token': refresh_token
+    }), 200
+
 # Add a refresh token route
 @app.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
     current_user = get_jwt_identity()
+    # Ensure user is still active before issuing a new access token
+    user = User.query.filter_by(email=current_user).first()
+    if not user or user.is_active is False:
+        return jsonify({'message': 'Account is deactivated. Use /reactivate to restore access.'}), 403
     new_access_token = create_access_token(identity=current_user, expires_delta=timedelta(hours=1))
     return jsonify({'access_token': new_access_token}), 200
+
+# Change password (authenticated users)
+@app.route('/password/change', methods=['POST'])
+@jwt_required()
+def change_password():
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found for this token'}), 404
+
+    data = request.get_json() or {}
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+    confirm_password = data.get('confirm_password')
+
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({'error': 'current_password, new_password and confirm_password are required'}), 400
+    if not check_password_hash(user.password, current_password):
+        return jsonify({'error': 'Current password is incorrect'}), 400
+    if new_password != confirm_password:
+        return jsonify({'error': 'Passwords do not match'}), 400
+    if len(new_password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+    hashed_new = generate_password_hash(new_password, method='pbkdf2:sha256')
+    user.password = hashed_new
+    user.confirm_password = hashed_new
+    db.session.commit()
+    return jsonify({'message': 'Password changed successfully'}), 200
+
+# Forgot password - request reset token
+@app.route('/password/forgot', methods=['POST'])
+def forgot_password():
+    data = request.get_json() or {}
+    email = data.get('email')
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        # Avoid user enumeration
+        return jsonify({'message': 'If the email exists, a reset token has been generated'}), 200
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+    prt = PasswordResetToken(user_id=user.id, token=token, expires_at=expires_at)
+    db.session.add(prt)
+    db.session.commit()
+
+    # TODO: send token via email. Return token for development/testing.
+    return jsonify({'message': 'Password reset token created', 'token': token, 'expires_at': expires_at.isoformat()}), 200
+
+# Reset password using token
+@app.route('/password/reset', methods=['POST'])
+def reset_password():
+    data = request.get_json() or {}
+    token = data.get('token')
+    new_password = data.get('new_password')
+    confirm_password = data.get('confirm_password')
+
+    if not token or not new_password or not confirm_password:
+        return jsonify({'error': 'token, new_password and confirm_password are required'}), 400
+    if new_password != confirm_password:
+        return jsonify({'error': 'Passwords do not match'}), 400
+    if len(new_password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+    prt = PasswordResetToken.query.filter_by(token=token, used=False).first()
+    if not prt:
+        return jsonify({'error': 'Invalid or used token'}), 400
+    if prt.expires_at < datetime.datetime.now():
+        return jsonify({'error': 'Token has expired'}), 400
+
+    user = User.query.get(prt.user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    hashed_new = generate_password_hash(new_password, method='pbkdf2:sha256')
+    user.password = hashed_new
+    user.confirm_password = hashed_new
+    prt.used = True
+    db.session.commit()
+    return jsonify({'message': 'Password has been reset successfully'}), 200
 
 # Instructor login endpoint
 @app.route('/instructor/login', methods=['POST'])
@@ -1127,13 +1865,12 @@ def profile():
         profiles = [{
             'id': u.id,
             'full_name': u.full_name,
-            'email': u.email,
             'bio': u.bio,
             'phone_number': u.phone_number,
             'profile_image': u.profile_image,
+            'cover_photo': u.cover_photo,
             'location': {
                 'country_region': u.location.country_region if u.location else None,
-                'state': u.location.state if u.location else None,
                 'city': u.location.city if u.location else None
             },
             'education': [{
@@ -1180,25 +1917,54 @@ def profile():
             if existing_user:
                 return jsonify({'error': 'Email already in use'}), 400
 
-        user.full_name = data.get('full_name', user.full_name)
-        user.email = new_email or user.email
-        user.bio = data.get('bio', user.bio)
-        user.phone_number = data.get('phone_number', user.phone_number)  # Add this line
-        user.profile_image = data.get('profile_image', user.profile_image)
+        # helper to determine non-empty values
+        def _non_empty(v):
+            return v is not None and (not isinstance(v, str) or v.strip() != '')
 
-        # Update location
-        location_data = data.get('location', {})
+        # Only update provided non-empty scalar fields
+        if 'full_name' in data and _non_empty(data.get('full_name')):
+            user.full_name = data['full_name']
+        if _non_empty(new_email):
+            user.email = new_email
+        if 'bio' in data and _non_empty(data.get('bio')):
+            user.bio = data['bio']
+        if 'phone_number' in data and _non_empty(data.get('phone_number')):
+            user.phone_number = data['phone_number']
+
+        # Enforce Cloudinary for profile_image if provided and non-empty
+        if 'profile_image' in data:
+            new_img = data.get('profile_image')
+            if _non_empty(new_img):
+                if not is_cloudinary_url(new_img):
+                    return jsonify({'error': 'Only Cloudinary URLs are allowed for profile_image'}), 400
+                user.profile_image = new_img
+
+        # Enforce Cloudinary for cover_photo if provided and non-empty
+        if 'cover_photo' in data:
+            new_cover = data.get('cover_photo')
+            if _non_empty(new_cover):
+                if not is_cloudinary_url(new_cover):
+                    return jsonify({'error': 'Only Cloudinary URLs are allowed for cover_photo'}), 400
+                user.cover_photo = new_cover
+
+        # Update location only with non-empty values
+        location_data = (data.get('location') or {})
         if user.location:
-            user.location.country_region = location_data.get('country_region', user.location.country_region)
-            user.location.city = location_data.get('city', user.location.city)
+            if 'country_region' in location_data and _non_empty(location_data.get('country_region')):
+                user.location.country_region = location_data['country_region']
+            if 'city' in location_data and _non_empty(location_data.get('city')):
+                user.location.city = location_data['city']
         else:
-            user.location = Location(
-                user_id=user.id,
-                country_region=location_data.get('country_region'),
-                city=location_data.get('city')
-            )
+            new_country = location_data.get('country_region')
+            new_city = location_data.get('city')
+            if _non_empty(new_country) or _non_empty(new_city):
+                user.location = Location(
+                    user_id=user.id,
+                    country_region=new_country if _non_empty(new_country) else None,
+                    city=new_city if _non_empty(new_city) else None
+                )
 
-        # Update education
+        # Update education (create when id is missing or not found)
         education_data = data.get('education', [])
         for edu_data in education_data:
             education_id = edu_data.get('id')
@@ -1210,7 +1976,7 @@ def profile():
                 education.start_date = parser.parse(edu_data.get('start_date')) if edu_data.get('start_date') else None
                 education.end_date = parser.parse(edu_data.get('end_date')) if edu_data.get('end_date') else None
             else:
-                education = Education(
+                new_education = Education(
                     user_id=user.id,
                     school=edu_data.get('school'),
                     degree=edu_data.get('degree'),
@@ -1218,9 +1984,9 @@ def profile():
                     start_date=parser.parse(edu_data.get('start_date')) if edu_data.get('start_date') else None,
                     end_date=parser.parse(edu_data.get('end_date')) if edu_data.get('end_date') else None
                 )
-                db.session.add(education)
+                db.session.add(new_education)
 
-        # Update work experience
+        # Update work experience (create when id is missing or not found)
         work_experience_data = data.get('work_experience', [])
         for work_data in work_experience_data:
             work_id = work_data.get('id')
@@ -1232,7 +1998,7 @@ def profile():
                 work.start_date = parser.parse(work_data.get('start_date')) if work_data.get('start_date') else None
                 work.end_date = parser.parse(work_data.get('end_date')) if work_data.get('end_date') else None
             else:
-                work = WorkExperience(
+                new_work = WorkExperience(
                     user_id=user.id,
                     company=work_data.get('company'),
                     role_title=work_data.get('role_title'),
@@ -1240,9 +2006,9 @@ def profile():
                     start_date=parser.parse(work_data.get('start_date')) if work_data.get('start_date') else None,
                     end_date=parser.parse(work_data.get('end_date')) if work_data.get('end_date') else None
                 )
-                db.session.add(work)
+                db.session.add(new_work)
 
-        # Update licenses and certifications
+        # Update licenses and certifications (create when id is missing or not found)
         licenses_certifications_data = data.get('licenses_certifications', [])
         for license_data in licenses_certifications_data:
             license_id = license_data.get('id')
@@ -1255,7 +2021,7 @@ def profile():
                 license.credentials_id = license_data.get('credentials_id', license.credentials_id)
                 license.credential_url = license_data.get('credential_url', license.credential_url)
             else:
-                license = LicenseCertification(
+                new_license = LicenseCertification(
                     user_id=user.id,
                     name=license_data.get('name'),
                     issuing_organization=license_data.get('issuing_organization'),
@@ -1264,7 +2030,7 @@ def profile():
                     credentials_id=license_data.get('credentials_id'),
                     credential_url=license_data.get('credential_url')
                 )
-                db.session.add(license)
+                db.session.add(new_license)
 
         try:
             db.session.commit()
@@ -1275,6 +2041,294 @@ def profile():
 
     # This should never be reached, but add it as a safeguard
     return jsonify({'error': 'Invalid request method'}), 405
+
+
+# Partial update endpoint: updates/creates only provided fields/items
+@app.route('/profile/partial', methods=['PATCH'])
+@jwt_required()
+def profile_partial_update():
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        try:
+            user_id = int(identity)
+            user = User.query.get(user_id)
+        except (TypeError, ValueError):
+            user = None
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    data = request.get_json() or {}
+
+    # Only touch fields provided
+    if 'full_name' in data:
+        if isinstance(data.get('full_name'), str) and data.get('full_name').strip() != '':
+            user.full_name = data.get('full_name')
+    if 'email' in data:
+        new_email = data.get('email')
+        if new_email and new_email != user.email:
+            exists = User.query.filter_by(email=new_email).first()
+            if exists:
+                return jsonify({'error': 'Email already in use'}), 400
+            user.email = new_email
+    if 'bio' in data:
+        user.bio = data.get('bio')
+    if 'phone_number' in data:
+        user.phone_number = data.get('phone_number')
+    if 'profile_image' in data and data.get('profile_image'):
+        if not is_cloudinary_url(data.get('profile_image')):
+            return jsonify({'error': 'Only Cloudinary URLs are allowed for profile_image'}), 400
+        user.profile_image = data.get('profile_image')
+    if 'cover_photo' in data and data.get('cover_photo'):
+        if not is_cloudinary_url(data.get('cover_photo')):
+            return jsonify({'error': 'Only Cloudinary URLs are allowed for cover_photo'}), 400
+        user.cover_photo = data.get('cover_photo')
+
+    # Location
+    if 'location' in data and isinstance(data.get('location'), dict):
+        loc = data.get('location')
+        if user.location:
+            if 'country_region' in loc:
+                user.location.country_region = loc.get('country_region')
+            if 'city' in loc:
+                user.location.city = loc.get('city')
+        else:
+            # create only if any provided
+            if loc.get('country_region') is not None or loc.get('city') is not None:
+                user.location = Location(
+                    user_id=user.id,
+                    country_region=loc.get('country_region'),
+                    city=loc.get('city')
+                )
+
+    # Education
+    if 'education' in data and isinstance(data.get('education'), list):
+        for edu_data in data.get('education'):
+            education_id = (edu_data or {}).get('id')
+            education = Education.query.get(education_id) if education_id else None
+            if education:
+                education.school = edu_data.get('school', education.school)
+                education.degree = edu_data.get('degree', education.degree)
+                education.field_of_study = edu_data.get('field_of_study', education.field_of_study)
+                education.start_date = parser.parse(edu_data.get('start_date')) if edu_data.get('start_date') else education.start_date
+                education.end_date = parser.parse(edu_data.get('end_date')) if edu_data.get('end_date') else education.end_date
+            else:
+                new_education = Education(
+                    user_id=user.id,
+                    school=edu_data.get('school'),
+                    degree=edu_data.get('degree'),
+                    field_of_study=edu_data.get('field_of_study'),
+                    start_date=parser.parse(edu_data.get('start_date')) if edu_data.get('start_date') else None,
+                    end_date=parser.parse(edu_data.get('end_date')) if edu_data.get('end_date') else None
+                )
+                db.session.add(new_education)
+
+    # Work Experience
+    if 'work_experience' in data and isinstance(data.get('work_experience'), list):
+        for work_data in data.get('work_experience'):
+            work_id = (work_data or {}).get('id')
+            work = WorkExperience.query.get(work_id) if work_id else None
+            if work:
+                work.company = work_data.get('company', work.company)
+                work.role_title = work_data.get('role_title', work.role_title)
+                work.job_description = work_data.get('job_description', work.job_description)
+                work.start_date = parser.parse(work_data.get('start_date')) if work_data.get('start_date') else work.start_date
+                work.end_date = parser.parse(work_data.get('end_date')) if work_data.get('end_date') else work.end_date
+            else:
+                new_work = WorkExperience(
+                    user_id=user.id,
+                    company=work_data.get('company'),
+                    role_title=work_data.get('role_title'),
+                    job_description=work_data.get('job_description'),
+                    start_date=parser.parse(work_data.get('start_date')) if work_data.get('start_date') else None,
+                    end_date=parser.parse(work_data.get('end_date')) if work_data.get('end_date') else None
+                )
+                db.session.add(new_work)
+
+    # Licenses & Certifications
+    if 'licenses_certifications' in data and isinstance(data.get('licenses_certifications'), list):
+        for license_data in data.get('licenses_certifications'):
+            license_id = (license_data or {}).get('id')
+            license = LicenseCertification.query.get(license_id) if license_id else None
+            if license:
+                license.name = license_data.get('name', license.name)
+                license.issuing_organization = license_data.get('issuing_organization', license.issuing_organization)
+                license.issue_date = parser.parse(license_data.get('issue_date')) if license_data.get('issue_date') else license.issue_date
+                license.expiration_date = parser.parse(license_data.get('expiration_date')) if license_data.get('expiration_date') else license.expiration_date
+                license.credentials_id = license_data.get('credentials_id', license.credentials_id)
+                license.credential_url = license_data.get('credential_url', license.credential_url)
+            else:
+                new_license = LicenseCertification(
+                    user_id=user.id,
+                    name=license_data.get('name'),
+                    issuing_organization=license_data.get('issuing_organization'),
+                    issue_date=parser.parse(license_data.get('issue_date')) if license_data.get('issue_date') else None,
+                    expiration_date=parser.parse(license_data.get('expiration_date')) if license_data.get('expiration_date') else None,
+                    credentials_id=license_data.get('credentials_id'),
+                    credential_url=license_data.get('credential_url')
+                )
+                db.session.add(new_license)
+
+    try:
+        db.session.commit()
+        return jsonify({'message': 'Profile partially updated successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
+
+
+@app.route('/profile/me', methods=['GET'])
+@jwt_required()
+def profile_me():
+    user_email = get_jwt_identity()
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    profile = {
+        'id': user.id,
+        'full_name': user.full_name,
+        'email': user.email,
+        'bio': user.bio,
+        'phone_number': user.phone_number,
+        'profile_image': user.profile_image,
+        'cover_photo': user.cover_photo,
+        'is_active': user.is_active,
+        'location': {
+            'country_region': user.location.country_region if user.location else None,
+            'city': user.location.city if user.location else None
+        },
+        'education': [{
+            'id': edu.id,
+            'school': edu.school,
+            'degree': edu.degree,
+            'field_of_study': edu.field_of_study,
+            'start_date': edu.start_date.isoformat() if edu.start_date else None,
+            'end_date': edu.end_date.isoformat() if edu.end_date else None
+        } for edu in user.education],
+        'work_experience': [{
+            'id': work.id,
+            'company': work.company,
+            'role_title': work.role_title,
+            'job_description': work.job_description,
+            'start_date': work.start_date.isoformat() if work.start_date else None,
+            'end_date': work.end_date.isoformat() if work.end_date else None
+        } for work in user.work_experience],
+        'licenses_certifications': [{
+            'id': lic.id,
+            'name': lic.name,
+            'issuing_organization': lic.issuing_organization,
+            'issue_date': lic.issue_date.isoformat() if lic.issue_date else None,
+            'expiration_date': lic.expiration_date.isoformat() if lic.expiration_date else None,
+            'credentials_id': lic.credentials_id,
+            'credential_url': lic.credential_url
+        } for lic in user.licenses_certifications]
+    }
+
+    return jsonify(profile), 200
+
+
+@app.route('/upload_cover_photo', methods=['POST'])
+@jwt_required()
+def upload_cover_photo():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part in the request'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    # Validate extension using allowed_image()
+    if not allowed_image(file.filename):
+        return jsonify({'error': 'Invalid file type'}), 400
+
+    # Compress the image
+    compressed_image = compress_image(file)
+
+    # Upload to Cloudinary
+    try:
+        upload_result = cloudinary.uploader.upload(compressed_image.getvalue())
+        image_url = upload_result['secure_url']
+    except Exception as e:
+        return jsonify({'error': f'Failed to upload image to Cloudinary: {str(e)}'}), 500
+
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        try:
+            user_id = int(identity)
+            user = User.query.get(user_id)
+        except (TypeError, ValueError):
+            user = None
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Store the Cloudinary URL in the database
+    user.cover_photo = image_url
+    db.session.commit()
+
+    return jsonify({'message': 'Cover photo uploaded successfully', 'image_url': image_url}), 200
+
+
+@app.route('/profile/active', methods=['PUT'])
+@jwt_required()
+def set_account_active():
+    data = request.get_json() or {}
+    if 'active' not in data:
+        return jsonify({'error': 'Missing required field: active (true/false)'}), 400
+
+    # Robust boolean parsing for strings/ints/bools
+    def _to_bool(val):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            s = val.strip().lower()
+            if s in ('true', '1', 'yes', 'y', 'on'):
+                return True
+            if s in ('false', '0', 'no', 'n', 'off'):
+                return False
+        raise ValueError('Invalid boolean')
+
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        try:
+            user_id = int(identity)
+            user = User.query.get(user_id)
+        except (TypeError, ValueError):
+            user = None
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    try:
+        user.is_active = _to_bool(data.get('active'))
+    except ValueError:
+        return jsonify({'error': 'active must be a boolean (true/false)'}), 400
+    db.session.commit()
+    state = 'reactivated' if user.is_active else 'deactivated'
+    return jsonify({'message': f'Account {state} successfully', 'is_active': user.is_active}), 200
+
+
+@app.route('/profile/active/toggle', methods=['POST'])
+@jwt_required()
+def toggle_account_active():
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        try:
+            user_id = int(identity)
+            user = User.query.get(user_id)
+        except (TypeError, ValueError):
+            user = None
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    user.is_active = not bool(user.is_active)
+    db.session.commit()
+    state = 'reactivated' if user.is_active else 'deactivated'
+    return jsonify({'message': f'Account {state} successfully', 'is_active': user.is_active}), 200
 
 
 #add/delete profile items
@@ -1470,7 +2524,7 @@ def get_users():
         'email': user.email,
         'bio': user.bio,
         'phone_number': user.phone_number,
-        'profile_image': user.profile_image,
+        'profile_image': build_media_url(user.profile_image) if user.profile_image else None,
         'location': {
             'country_region': user.location.country_region,
             'city': user.location.city
@@ -1487,93 +2541,252 @@ def get_users():
         'has_prev': pagination.has_prev
     }), 200
 
+@app.route('/search', methods=['GET'])
+def global_search():
+    """Unified global search across courses, modules, and users.
+    Accepts q (or search) and optional limit per section.
+    Response shape:
+    {
+      "query": str,
+      "courses": [{"id": int, "course_name": str, "title": [str], "categories": [str]}],
+      "modules": [{"id": int, "name": str, "description": str}],
+      "users": [{"id": int, "full_name": str, "email": str}]
+    }
+    """
+    q = request.args.get('q') or request.args.get('search')
+    if not q or not q.strip():
+        return jsonify({
+            'query': q or '',
+            'courses': [],
+            'modules': [],
+            'users': []
+        }), 200
+
+    limit = request.args.get('limit', 5, type=int)
+    term = f"%{q}%"
+
+    # Courses
+    course_query = Course.query.options(db.joinedload(Course.categories)).filter(
+        or_(
+            Course.course_name.ilike(term),
+            Course.content.ilike(term),
+            Course.brief.ilike(term)
+        )
+    ).order_by(Course.date_created.desc(), Course.id.desc()).limit(limit)
+    course_results = course_query.all()
+    courses_data = [
+        {
+            'id': c.id,
+            'course_name': c.course_name,
+            'title': c.get_all_titles(),
+            'categories': [cat.name for cat in c.categories]
+        }
+        for c in course_results
+    ]
+
+    # Modules
+    module_query = Module.query.filter(
+        or_(
+            Module.name.ilike(term),
+            Module.description.ilike(term)
+        )
+    ).order_by(Module.id.desc()).limit(limit)
+    module_results = module_query.all()
+    modules_data = [
+        {
+            'id': m.id,
+            'name': m.name,
+            'description': m.description
+        }
+        for m in module_results
+    ]
+
+    # Users
+    user_query = User.query.filter(
+        or_(
+            User.full_name.ilike(term),
+            User.email.ilike(term),
+            User.bio.ilike(term)
+        )
+    ).order_by(User.id.desc()).limit(limit)
+    user_results = user_query.all()
+    users_data = [
+        {
+            'id': u.id,
+            'full_name': u.full_name,
+            'profile_image': build_media_url(u.profile_image)
+        }
+        for u in user_results
+    ]
+
+    return jsonify({
+        'query': q,
+        'courses': courses_data,
+        'modules': modules_data,
+        'users': users_data
+    }), 200
+
+@app.route('/users/<int:user_id>', methods=['GET'])
+def get_user_profile(user_id):
+    """Return a single user's public profile with basic details."""
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    user_data = {
+        'id': user.id,
+        'full_name': user.full_name,
+        'bio': user.bio,
+        'phone_number': user.phone_number,
+        'profile_image': build_media_url(user.profile_image),
+        'cover_photo': build_media_url(user.cover_photo),
+        'location': {
+            'country_region': user.location.country_region,
+            'city': user.location.city
+        } if user.location else None,
+        'education': [
+            {
+                'id': e.id,
+                'school': e.school,
+                'degree': e.degree,
+                'field_of_study': e.field_of_study,
+                'start_date': e.start_date.isoformat() if e.start_date else None,
+                'end_date': e.end_date.isoformat() if e.end_date else None
+            } for e in user.education
+        ],
+        'work_experience': [
+            {
+                'id': w.id,
+                'company': w.company,
+                'role_title': w.role_title,
+                'job_description': w.job_description,
+                'start_date': w.start_date.isoformat() if w.start_date else None,
+                'end_date': w.end_date.isoformat() if w.end_date else None
+            } for w in user.work_experience
+        ],
+        'licenses_certifications': [
+            {
+                'id': l.id,
+                'name': l.name,
+                'issuing_organization': l.issuing_organization,
+                'issue_date': l.issue_date.isoformat() if l.issue_date else None,
+                'expiration_date': l.expiration_date.isoformat() if l.expiration_date else None,
+                'credentials_id': l.credentials_id,
+                'credential_url': l.credential_url
+            } for l in user.licenses_certifications
+        ]
+    }
+
+    return jsonify(user_data), 200
+
+@app.route('/profile/<int:user_id>', methods=['GET'])
+def get_user_profile_alias(user_id):
+    """Alias for backward compatibility: maps /profile/<id> to public user profile.
+    Reuses the logic from get_user_profile.
+    """
+    return get_user_profile(user_id)
+
 @app.route('/user/<int:user_id>', methods=['DELETE'])
 @jwt_required()
 def delete_user(user_id):
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
-    
+    # Only account owner or admin can delete
+    claims = get_jwt()
+    current_identity = get_jwt_identity()
+    is_admin = bool(claims.get('is_admin'))
+    if not is_admin and current_identity != user.email:
+        return jsonify({'error': 'Forbidden: you can only delete your own account'}), 403
+
     db.session.delete(user)
     db.session.commit()
     return jsonify({'message': 'User deleted successfully'}), 200
 
-
-    @app.route('/user/<int:user_id>', methods=['PUT'])
-    @jwt_required()
-    def update_user(user_id):
-     user = User.query.get(user_id)
+@app.route('/user/<int:user_id>', methods=['PUT'])
+@jwt_required()
+def update_user(user_id):
+    user = User.query.get(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
-    
-    data = request.get_json()
-    
-    user.full_name = data.get('full_name', user.full_name)
-    user.email = data.get('email', user.email)
-    user.bio = data.get('bio', user.bio)
-    user.profile_image = data.get('profile_image', user.profile_image)
 
-    # Update location
-    location_data = data.get('location', {})
+    # Only account owner or admin can update
+    claims = get_jwt()
+    current_identity = get_jwt_identity()
+    is_admin = bool(claims.get('is_admin'))
+    if not is_admin and current_identity != user.email:
+        return jsonify({'error': 'Forbidden: you can only update your own account'}), 403
+
+    data = request.get_json() or {}
+    
+    # Only update scalar fields if a non-empty value is provided
+    def _non_empty(v):
+        return v is not None and (not isinstance(v, str) or v.strip() != '')
+
+    if 'full_name' in data and _non_empty(data.get('full_name')):
+        user.full_name = data['full_name']
+    if 'email' in data and _non_empty(data.get('email')):
+        user.email = data['email']
+    if 'bio' in data and _non_empty(data.get('bio')):
+        user.bio = data['bio']
+    if 'profile_image' in data and _non_empty(data.get('profile_image')):
+        user.profile_image = data['profile_image']
+
+    # Update location (only when non-empty values are provided)
+    location_data = data.get('location', {}) or {}
     if user.location:
-        user.location.country_region = location_data.get('country_region', user.location.country_region)
-        user.location.city = location_data.get('city', user.location.city)
+        if 'country_region' in location_data and _non_empty(location_data.get('country_region')):
+            user.location.country_region = location_data['country_region']
+        if 'city' in location_data and _non_empty(location_data.get('city')):
+            user.location.city = location_data['city']
     else:
-        user.location = Location(
-            country_region=location_data.get('country_region'),
-            city=location_data.get('city')
-        )
+        new_country = location_data.get('country_region')
+        new_city = location_data.get('city')
+        if _non_empty(new_country) or _non_empty(new_city):
+            user.location = Location(
+                country_region=new_country if _non_empty(new_country) else None,
+                city=new_city if _non_empty(new_city) else None
+            )
 
     # Update education
     education_data = data.get('education', [])
     for edu_data in education_data:
         education_id = edu_data.get('id')
         education = Education.query.get(education_id) if education_id else None
-        if education:
+        # Only update existing records with valid IDs that belong to the user.
+        if education and education.user_id == user.id:
             education.school = edu_data.get('school', education.school)
             education.degree = edu_data.get('degree', education.degree)
             education.field_of_study = edu_data.get('field_of_study', education.field_of_study)
             education.start_date = datetime.fromisoformat(edu_data.get('start_date')) if edu_data.get('start_date') else None
             education.end_date = datetime.fromisoformat(edu_data.get('end_date')) if edu_data.get('end_date') else None
         else:
-            education = Education(
-                user_id=user.id,
-                school=edu_data.get('school'),
-                degree=edu_data.get('degree'),
-                field_of_study=edu_data.get('field_of_study'),
-                start_date=datetime.fromisoformat(edu_data.get('start_date')) if edu_data.get('start_date') else None,
-                end_date=datetime.fromisoformat(edu_data.get('end_date')) if edu_data.get('end_date') else None
-            )
-            user.education.append(education)
+            # Skip creation on update endpoint; new items should be added explicitly via a dedicated add flow
+            continue
 
     # Update work experience
     work_experience_data = data.get('work_experience', [])
     for work_data in work_experience_data:
         work_id = work_data.get('id')
         work = WorkExperience.query.get(work_id) if work_id else None
-        if work:
+        # Only update existing records with valid IDs that belong to the user.
+        if work and work.user_id == user.id:
             work.company = work_data.get('company', work.company)
             work.role_title = work_data.get('role_title', work.role_title)
             work.job_description = work_data.get('job_description', work.job_description)
             work.start_date = datetime.fromisoformat(work_data.get('start_date')) if work_data.get('start_date') else None
             work.end_date = datetime.fromisoformat(work_data.get('end_date')) if work_data.get('end_date') else None
         else:
-            work = WorkExperience(
-                user_id=user.id,
-                company=work_data.get('company'),
-                role_title=work_data.get('role_title'),
-                job_description=work_data.get('job_description'),
-                start_date=datetime.fromisoformat(work_data.get('start_date')) if work_data.get('start_date') else None,
-                end_date=datetime.fromisoformat(work_data.get('end_date')) if work_data.get('end_date') else None
-            )
-            user.work_experience.append(work)
+            # Skip creation on update endpoint; new items should be added explicitly via a dedicated add flow
+            continue
 
     # Update licenses and certifications
     licenses_certifications_data = data.get('licenses_certifications', [])
     for license_data in licenses_certifications_data:
         license_id = license_data.get('id')
         license = LicenseCertification.query.get(license_id) if license_id else None
-        if license:
+        # Only update existing records with valid IDs that belong to the user.
+        if license and license.user_id == user.id:
             license.name = license_data.get('name', license.name)
             license.issuing_organization = license_data.get('issuing_organization', license.issuing_organization)
             license.issue_date = datetime.fromisoformat(license_data.get('issue_date')) if license_data.get('issue_date') else None
@@ -1581,16 +2794,8 @@ def delete_user(user_id):
             license.credentials_id = license_data.get('credentials_id', license.credentials_id)
             license.credential_url = license_data.get('credential_url', license.credential_url)
         else:
-            license = LicenseCertification(
-                user_id=user.id,
-                name=license_data.get('name'),
-                issuing_organization=license_data.get('issuing_organization'),
-                issue_date=datetime.fromisoformat(license_data.get('issue_date')) if license_data.get('issue_date') else None,
-                expiration_date=datetime.fromisoformat(license_data.get('expiration_date')) if license_data.get('expiration_date') else None,
-                credentials_id=license_data.get('credentials_id'),
-                credential_url=license_data.get('credential_url')
-            )
-            user.licenses_certifications.append(license)
+            # Skip creation on update endpoint; new items should be added explicitly via a dedicated add flow
+            continue
 
     db.session.commit()
     return jsonify({'message': 'User updated successfully'}), 200
@@ -1610,23 +2815,51 @@ def get_user_id_somehow():
     return user_id
 
 # Route to handle profile image uploads
-# Configure Cloudinary
+# Configure Cloudinary (use env vars if set, else fallback to existing)
 cloudinary.config(
-    cloud_name = "dkj6ipdd6",
-    api_key = "921656148348163",
-    api_secret = "kQvQY26E6yWqS46f38Bc8hSXJQw"
+    cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME', "dkj6ipdd6"),
+    api_key=os.getenv('CLOUDINARY_API_KEY', "921656148348163"),
+    api_secret=os.getenv('CLOUDINARY_API_SECRET', "kQvQY26E6yWqS46f38Bc8hSXJQw")
 )
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'mkv', 'avi', 'webm'}
+ALLOWED_DOC_EXTENSIONS = {'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv'}
 MAX_IMAGE_SIZE = (1024, 1024)  # Maximum dimensions for the image
 
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def _has_ext(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower()
+
+def allowed_image(filename):
+    ext = _has_ext(filename)
+    return ext and ext in ALLOWED_IMAGE_EXTENSIONS
+
+def allowed_video(filename):
+    ext = _has_ext(filename)
+    return ext and ext in ALLOWED_VIDEO_EXTENSIONS
+
+def allowed_doc(filename):
+    ext = _has_ext(filename)
+    return ext and ext in ALLOWED_DOC_EXTENSIONS
 
 def compress_image(image, max_size=MAX_IMAGE_SIZE):
     img = Image.open(image)
     img.thumbnail(max_size)
+    # Ensure compatibility with JPEG (no alpha channel)
+    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        # Composite onto a white background
+        background = Image.new('RGB', img.size, (255, 255, 255))
+        if img.mode in ('RGBA', 'LA'):
+            alpha = img.split()[-1]
+            background.paste(img, mask=alpha)
+        else:
+            rgba = img.convert('RGBA')
+            alpha = rgba.split()[-1]
+            background.paste(rgba, mask=alpha)
+        img = background
+    else:
+        img = img.convert('RGB')
+
     img_io = io.BytesIO()
     img.save(img_io, format='JPEG', quality=85)
     img_io.seek(0)
@@ -1642,7 +2875,8 @@ def upload_profile_image():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     
-    if not allowed_file(file.filename):
+    # Validate extension using allowed_image()
+    if not allowed_image(file.filename):
         return jsonify({'error': 'Invalid file type'}), 400
 
     # Compress the image
@@ -1655,9 +2889,17 @@ def upload_profile_image():
     except Exception as e:
         return jsonify({'error': f'Failed to upload image to Cloudinary: {str(e)}'}), 500
 
-    user_id = get_jwt_identity()
-    user = User.query.get(user_id)
-    if user is None:
+    identity = get_jwt_identity()
+    # Primary auth flow stores email as identity for users
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        # Fallback: if identity looks like an integer ID, try by ID
+        try:
+            user_id = int(identity)
+            user = User.query.get(user_id)
+        except (TypeError, ValueError):
+            user = None
+    if not user:
         return jsonify({'error': 'User not found'}), 404
 
     # Store the Cloudinary URL in the database
@@ -1821,6 +3063,7 @@ class Message(db.Model):
     content = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
     is_read = db.Column(db.Boolean, default=False)
+    attachment_url = db.Column(db.String(500), nullable=True)
 
     sender = db.relationship('User', foreign_keys=[sender_id], backref='sent_messages')
     recipient = db.relationship('User', foreign_keys=[recipient_id], backref='received_messages')
@@ -1829,30 +3072,64 @@ class Message(db.Model):
 @app.route('/messages', methods=['POST'])
 @jwt_required()
 def send_message():
-    sender_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify({'error': 'Unauthorized'}), 401
+    sender_id = current_user.id
 
-    data = request.get_json()
-    recipient_id = data.get('recipient_id')
-    content = data.get('content')
+    # Support both JSON and multipart form submissions
+    content_type = request.content_type or ''
+    attachment_url = None
 
-    if not recipient_id or not content:
-        return jsonify({'error': 'Recipient ID and content are required'}), 400
+    if content_type.startswith('multipart/form-data'):
+        form = request.form
+        recipient_id = form.get('recipient_id', type=int)
+        content = form.get('content')
+        # Optional file
+        file = request.files.get('file') if 'file' in request.files else None
+        if file and file.filename:
+            # Upload directly to Cloudinary using existing helper
+            try:
+                attachment_url = upload_to_cloudinary(file, folder='messages', resource_type='auto')
+            except Exception as e:
+                return jsonify({'error': 'File upload failed', 'details': str(e)}), 400
+    else:
+        data = request.get_json(silent=True) or {}
+        recipient_id = data.get('recipient_id')
+        content = data.get('content')
+
+    if not recipient_id:
+        return jsonify({'error': 'Recipient ID is required'}), 400
+
+    # Require at least content or an attachment
+    if not (content and content.strip()) and not attachment_url:
+        return jsonify({'error': 'Either content or a file attachment is required'}), 400
 
     recipient = User.query.get(recipient_id)
     if not recipient:
         return jsonify({'error': 'Recipient not found'}), 404
 
-    message = Message(sender_id=sender_id, recipient_id=recipient_id, content=content)
+    message = Message(
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        content=content or '',
+        attachment_url=attachment_url
+    )
     db.session.add(message)
     db.session.commit()
 
-    return jsonify({'message': 'Message sent successfully'}), 201
+    return jsonify({'message': 'Message sent successfully', 'attachment_url': message.attachment_url}), 201
 
 # Get messages between two users
 @app.route('/messages', methods=['GET'])
 @jwt_required()
 def get_all_messages():
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify([]), 200
+    user_id = current_user.id
     users_only = request.args.get('users_only', 'false').lower() == 'true'
     
     if users_only:
@@ -1867,7 +3144,7 @@ def get_all_messages():
         users_data = [{
             'id': user.id,
             'full_name': user.full_name,
-            'profile_image': user.profile_image
+            'profile_image': build_media_url(user.profile_image)
         } for user in chat_users]
         
         return jsonify(users_data), 200
@@ -1879,7 +3156,11 @@ def get_all_messages():
 @app.route('/messages/<int:other_user_id>', methods=['GET'])
 @jwt_required()
 def get_messages(other_user_id):
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify({'error': 'Unauthorized'}), 401
+    user_id = current_user.id
 
     # Get messages between two users
     messages = Message.query.filter(
@@ -1892,6 +3173,7 @@ def get_messages(other_user_id):
         'sender_id': message.sender_id,
         'recipient_id': message.recipient_id,
         'content': message.content,
+        'attachment_url': message.attachment_url,
         'timestamp': message.timestamp,
         'is_read': message.is_read
     } for message in messages]
@@ -1901,7 +3183,11 @@ def get_messages(other_user_id):
 @app.route('/chat-users', methods=['GET'])
 @jwt_required()
 def get_chat_users_list():
-    current_user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify([]), 200
+    current_user_id = current_user.id
     
     # Revised query to find users who have exchanged messages
     chat_users = db.session.query(User).filter(
@@ -1919,10 +3205,26 @@ def get_chat_users_list():
         )
     ).distinct().all()
     
+    # Precompute unread counts per sender for current user to enrich the list efficiently
+    sender_ids = [user.id for user in chat_users]
+    unread_counts = {}
+    if sender_ids:
+        unread_counts = dict(
+            db.session.query(Message.sender_id, func.count(Message.id))
+            .filter(
+                Message.recipient_id == current_user_id,
+                Message.is_read == False,
+                Message.sender_id.in_(sender_ids)
+            )
+            .group_by(Message.sender_id)
+            .all()
+        )
+    
     users_data = [{
         'id': user.id,
         'full_name': user.full_name,
-        'profile_image': user.profile_image
+        'profile_image': build_media_url(user.profile_image),
+        'unread_count': int(unread_counts.get(user.id, 0))
     } for user in chat_users]
     
     return jsonify(users_data), 200
@@ -1974,7 +3276,11 @@ def get_chat_users_list():
 @app.route('/messages/<int:message_id>/read', methods=['PUT'])
 @jwt_required()
 def mark_message_as_read(message_id):
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify({'error': 'Unauthorized'}), 401
+    user_id = current_user.id
 
     message = Message.query.get(message_id)
     if not message:
@@ -1992,6 +3298,43 @@ def mark_message_as_read(message_id):
 # Delete a message
 
 #peer review
+
+@app.route('/messages/unread-count', methods=['GET'])
+@jwt_required()
+def get_unread_messages_count():
+    """Return total number of unread messages for the current user."""
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify({'unread_count': 0}), 200
+    current_user_id = current_user.id
+    count = Message.query.filter(
+        Message.recipient_id == current_user_id,
+        Message.is_read == False
+    ).count()
+    return jsonify({'unread_count': int(count)}), 200
+
+
+@app.route('/messages/unread-count/by-user', methods=['GET'])
+@jwt_required()
+def get_unread_messages_count_by_user():
+    """Return unread message counts grouped by sender for the current user."""
+    identity = get_jwt_identity()
+    current_user = User.query.filter_by(email=identity).first()
+    if not current_user:
+        return jsonify([]), 200
+    current_user_id = current_user.id
+    rows = (
+        db.session.query(Message.sender_id, func.count(Message.id))
+        .filter(
+            Message.recipient_id == current_user_id,
+            Message.is_read == False
+        )
+        .group_by(Message.sender_id)
+        .all()
+    )
+    data = [{'user_id': sender_id, 'count': int(cnt)} for sender_id, cnt in rows]
+    return jsonify(data), 200
 
 
 # PeerReview model
@@ -2095,6 +3438,20 @@ def submit_review(review_id):
     review.review_date = datetime.now()
     db.session.commit()
 
+    # Notify submitter (if regular user and not the reviewer)
+    try:
+        if review.submitter_id != reviewer_id and review.submitter and is_regular_user(review.submitter):
+            course_title = None
+            try:
+                course_title = review.course.get_display_title()
+            except Exception:
+                course_title = 'the course'
+            reviewer = User.query.get(reviewer_id)
+            reviewer_name = reviewer.full_name if reviewer else 'A reviewer'
+            notify_user(review.submitter_id, f"Your submission in {course_title} was reviewed by {reviewer_name}")
+    except Exception:
+        pass
+
     return jsonify({'message': 'Review submitted successfully'}), 200
 
 # Get reviews for a user's submitted documents
@@ -2107,7 +3464,7 @@ def get_my_submissions():
 
     submissions_data = [{
         'id': submission.id,
-        'course_name': submission.course.title,
+        'course_name': submission.course.get_display_title(),
         'submission_date': submission.submission_date,
         'reviewer_name': submission.reviewer.full_name if submission.reviewer else None,
         'review_date': submission.review_date,
@@ -2434,8 +3791,10 @@ def update_admin_details(admin_id):
         if 'phone' in data:
             admin.phone = data['phone']
         if 'profile_image' in data:
+            if data['profile_image'] is not None and not is_cloudinary_url(data['profile_image']):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for profile_image'}), 400
             admin.profile_image = data['profile_image']
-        
+
         # Update roles if provided
         if 'roles' in data:
             new_roles = []
@@ -2563,6 +3922,8 @@ def admin_profile():
         if 'phone' in data:
             admin.phone = data['phone']
         if 'profile_image' in data:
+            if data['profile_image'] is not None and not is_cloudinary_url(data['profile_image']):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for profile_image'}), 400
             admin.profile_image = data['profile_image']
 
         try:
@@ -2625,8 +3986,13 @@ def create_instructor():
                     return jsonify({'error': f'{field.replace("_", " ").title()} is required'}), 400
 
             # Create course
+            # Ensure title is always stored as an array
+            title = course_data['course_title']
+            if not isinstance(title, list):
+                title = [title]
+
             course = Course(
-                title=course_data['course_title'],
+                title=title,
                 course_name=course_data['course_name'],
                 content='',  # Can be updated later
                 brief=course_data['brief'],
@@ -2634,7 +4000,7 @@ def create_instructor():
                 course_type=course_data['course_type'],
                 author_id=instructor.id,
                 instructor_id=instructor.id,
-                status='draft',
+                status='published',
                 price=float(course_data['amount'])
             )
             db.session.add(course)
@@ -2674,7 +4040,7 @@ def create_instructor():
         if 'course' in locals():
             response_data['assigned_course'] = {
                 'id': course.id,
-                'title': course.title,
+                'title': course.get_all_titles(),  # Return full title array
                 'course_name': course.course_name,
                 'course_type': course.course_type,
                 'brief': course.brief,
@@ -2708,7 +4074,7 @@ def get_instructors():
         instructor_courses = Course.query.filter_by(instructor_id=instructor.id).all()
         courses_data = [{
             'id': course.id,
-            'title': course.title,
+            'title': course.get_all_titles(),  # Return full title array
             'course_type': course.course_type,
             'brief': course.brief,
             'content': course.content,
@@ -2717,11 +4083,13 @@ def get_instructors():
             'number_of_modules': course.number_of_modules,
             'date_created': course.date_created.isoformat() if course.date_created else None,
             'categories': [category.name for category in course.categories],
-            'modules': [{
-                'id': module.id,
-                'name': module.name,
-                'description': module.description
-            } for module in course.modules.order_by(Module.order)]
+            'module_id': course.module_id,
+            'order': course.order,
+            'module': {
+                'id': course.module.id,
+                'name': course.module.name,
+                'description': course.module.description
+            } if course.module else None
         } for course in instructor_courses]
 
         # Create instructor data dictionary
@@ -2924,6 +4292,38 @@ def create_user_post():
     db.session.add(new_post)
     db.session.commit()
 
+    # Notify followers of related courses (regular users only, exclude author)
+    try:
+        subject = new_post.subject
+        notified_ids = set()
+        # Find courses whose title or any of their display titles match the subject
+        courses = Course.query.all()
+        for c in courses:
+            match_title = False
+            try:
+                if getattr(c, 'title', None) == subject:
+                    match_title = True
+                else:
+                    titles = c.get_all_titles() if hasattr(c, 'get_all_titles') else []
+                    if titles and subject in titles:
+                        match_title = True
+            except Exception:
+                match_title = False
+            if not match_title:
+                continue
+            followers = getattr(c, 'followers', []) or []
+            for follower in followers:
+                if follower.id == user_id:
+                    continue
+                if not is_regular_user(follower):
+                    continue
+                if follower.id in notified_ids:
+                    continue
+                notify_user(follower.id, f"New post in {subject}: {title} by {user_info.get('full_name')}")
+                notified_ids.add(follower.id)
+    except Exception:
+        pass
+
     response_data = {
         'id': new_post.id,
         'title': new_post.title,
@@ -3027,6 +4427,18 @@ def get_user_post(post_id):
         if vote:
             user_vote = vote.vote_type
 
+    # Record that the current user read this post (update timestamp if exists)
+    if current_user:
+        try:
+            read_entry = UserPostRead.query.filter_by(user_id=current_user.id, post_id=post_id).first()
+            if read_entry:
+                read_entry.read_at = datetime.datetime.now()
+            else:
+                db.session.add(UserPostRead(user_id=current_user.id, post_id=post_id, read_at=datetime.datetime.now()))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     post_data = {
         'id': post.id,
         'title': post.title,
@@ -3053,7 +4465,7 @@ def get_user_post(post_id):
 @jwt_required()
 def get_courses_for_follow():
     courses = Course.query.all()
-    return jsonify([{'id': c.id, 'title': c.title} for c in courses]), 200
+    return jsonify([{'id': c.id, 'title': c.get_all_titles()} for c in courses]), 200
 
 @app.route('/follow_course/<int:course_id>', methods=['POST'])
 @jwt_required()
@@ -3122,17 +4534,41 @@ def get_followed_posts():
 
 
     #Notification
+    # Helper utilities for notifications
+def is_regular_user(user: "User") -> bool:
+    """Return True if the user is not an admin or instructor (based on roles names)."""
+    try:
+        role_names = {r.name.lower() for r in (user.roles or []) if getattr(r, 'name', None)}
+        return 'admin' not in role_names and 'instructor' not in role_names
+    except Exception:
+        # If roles are not available, treat as regular
+        return True
+
+def notify_user(user_id: int, content: str):
+    """Create and persist a notification for a user (regular users focus)."""
+    try:
+        notif = Notification(user_id=user_id, content=content)
+        db.session.add(notif)
+        db.session.commit()
+        return notif
+    except Exception:
+        db.session.rollback()
+        return None
+
     # Create a notification
 @app.route('/notifications', methods=['POST'])
 @jwt_required()
 def create_notification():
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
 
     content = request.json.get('content')
     if not content:
-        return jsonify({'error': 'Notification content is required'}), 400
+        return jsonify({'error': 'Content is required'}), 400
 
-    notification = Notification(user_id=user_id, content=content)
+    notification = Notification(user_id=user.id, content=content)
     db.session.add(notification)
     db.session.commit()
 
@@ -3141,9 +4577,12 @@ def create_notification():
 @app.route('/notifications', methods=['GET'])
 @jwt_required()
 def get_notifications():
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
 
-    notifications = Notification.query.filter_by(user_id=user_id).order_by(Notification.created_at.desc()).all()
+    notifications = Notification.query.filter_by(user_id=user.id).order_by(Notification.created_at.desc()).all()
     notifications_data = [{
         'id': notif.id,
         'content': notif.content,
@@ -3153,12 +4592,25 @@ def get_notifications():
 
     return jsonify(notifications_data), 200
 
+@app.route('/notifications/unread-count', methods=['GET'])
+@jwt_required()
+def get_unread_notification_count():
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    count = Notification.query.filter_by(user_id=user.id, is_read=False).count()
+    return jsonify({'unread_count': int(count)}), 200
+
 @app.route('/notifications/<int:notification_id>/read', methods=['PUT'])
 @jwt_required()
 def mark_notification_as_read(notification_id):
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
 
-    notification = Notification.query.filter_by(id=notification_id, user_id=user_id).first()
+    notification = Notification.query.filter_by(id=notification_id, user_id=user.id).first()
     if not notification:
         return jsonify({'error': 'Notification not found'}), 404
 
@@ -3167,12 +4619,26 @@ def mark_notification_as_read(notification_id):
 
     return jsonify({'message': 'Notification marked as read'}), 200
 
+@app.route('/notifications/mark-all-read', methods=['PUT'])
+@jwt_required()
+def mark_all_notifications_as_read():
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    Notification.query.filter_by(user_id=user.id, is_read=False).update({Notification.is_read: True})
+    db.session.commit()
+    return jsonify({'message': 'All notifications marked as read'}), 200
+
 @app.route('/notifications/<int:notification_id>', methods=['DELETE'])
 @jwt_required()
 def delete_notification(notification_id):
-    user_id = get_jwt_identity()
+    identity = get_jwt_identity()
+    user = User.query.filter_by(email=identity).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
 
-    notification = Notification.query.filter_by(id=notification_id, user_id=user_id).first()
+    notification = Notification.query.filter_by(id=notification_id, user_id=user.id).first()
     if not notification:
         return jsonify({'error': 'Notification not found'}), 404
 
@@ -3243,7 +4709,7 @@ def view_instructor_students(instructor_id):
                 # Add course information
                 students_data[student.id]['courses'].append({
                     'course_id': course.id,
-                    'course_title': course.title,
+                    'course_title': course.get_display_title(),
                     'enrollment_date': None  # You can add enrollment date if you track it
                 })
         # Convert dictionary to list for response
@@ -3347,6 +4813,13 @@ def save_certificate():
         
         db.session.add(new_certificate)
         db.session.commit()
+        # Notify the user about issued certificate
+        try:
+            user = User.query.get(user_id)
+            if user and is_regular_user(user):
+                notify_user(user_id, f"Certificate issued for {course.get_display_title()}. Certificate No: {new_certificate.certificate_number}")
+        except Exception:
+            pass
         
         return jsonify({
             'message': 'Certificate saved successfully',
@@ -3355,7 +4828,7 @@ def save_certificate():
                 'certificate_number': new_certificate.certificate_number,
                 'certificate_url': new_certificate.certificate_url,
                 'issue_date': new_certificate.issue_date.isoformat(),
-                'course_title': course.title
+                'course_title': course.get_display_title()
             }
         }), 201
         
@@ -3376,7 +4849,7 @@ def get_user_certificates():
             'certificate_number': cert.certificate_number,
             'certificate_url': cert.certificate_url,
             'issue_date': cert.issue_date.isoformat(),
-            'course_title': cert.course.title
+            'course_title': cert.course.get_display_title()
         } for cert in certificates]
         
         return jsonify({
@@ -3400,7 +4873,7 @@ def get_certificate(certificate_number):
             'certificate_number': certificate.certificate_number,
             'certificate_url': certificate.certificate_url,
             'issue_date': certificate.issue_date.isoformat(),
-            'course_title': certificate.course.title,
+            'course_title': certificate.course.get_display_title(),
             'user_name': certificate.user.full_name
         }
         
@@ -3424,39 +4897,42 @@ def get_instructor_courses():
             if not instructor:
                 continue
 
-            # Get modules with descriptions
-            modules_data = [{
-                'id': module.id,
-                'name': module.name,
-                'title': module.title,
-                'description': module.description,
-                'order': module.order,
-                'media_file': module.media_file,
-                'additional_resources': module.additional_resources
-            } for module in course.modules.order_by(Module.order)]
+            # Get module information if course belongs to a module
+            module_data = None
+            if course.module_id:
+                module = Module.query.get(course.module_id)
+                if module:
+                    module_data = {
+                        'id': module.id,
+                        'name': module.name,
+                        'description': module.description,
+                        'order': module.order
+                    }
 
             course_dict = {
                 'id': course.id,
-                'title': course.title,
+                'title': course.get_all_titles(),  # Return full title array
                 'course_name': course.course_name,
-                'image': course.image,
+                'image': build_media_url(course.image),
                 'content': course.content,
-                'video': course.video,
+                'video': build_media_url(course.video),
                 'brief': course.brief,
-                'number_of_modules': course.number_of_modules,
                 'course_type': course.course_type,
                 'price': course.price,
                 'status': course.status,
-                'additional_resources': course.additional_resources,
+                'additional_resources': build_media_url(course.additional_resources),
+                'module_id': course.module_id,
+                'order': course.order,
                 'date_created': course.date_created.isoformat() if course.date_created else None,
                 'last_updated': course.last_updated.isoformat() if course.last_updated else None,
                 'categories': [category.name for category in course.categories],
-                'modules': modules_data,
+                'module': module_data,
                 'student_count': course.student_count,
                 'instructor': {
                     'id': instructor.id,
                     'name': instructor.full_name,
-                    'email': instructor.email
+                    'email': instructor.email,
+                    'expertise': instructor.expertise
                 }
             }
             courses_data.append(course_dict)
@@ -3477,7 +4953,7 @@ def get_instructor_students():
     
     try:
         # Verify instructor exists
-        instructor = Instructor.query.get(instructor_id)
+        instructor = db.session.get(Instructor, instructor_id)
         if not instructor:
             return jsonify({'error': 'Instructor not found'}), 404
 
@@ -3539,7 +5015,7 @@ def get_student_details(student_id):
     
     try:
         # Verify instructor exists
-        instructor = Instructor.query.get(instructor_id)
+        instructor = db.session.get(Instructor, instructor_id)
         if not instructor:
             return jsonify({'error': 'Instructor not found'}), 404
 
@@ -3576,7 +5052,7 @@ def get_student_details(student_id):
             } for edu in student.education],
             'enrolled_courses': [{
                 'id': course.id,
-                'title': course.title,
+                'title': course.get_display_title(),
                 'enrollment_date': datetime.datetime.utcnow().isoformat(),  # You might want to store actual enrollment dates
                 'progress': 0  # You might want to add a progress tracking system
             } for course in student_courses]
@@ -3610,7 +5086,7 @@ def get_course_students(course_id):
 
         return jsonify({
             'course_id': course_id,
-            'course_title': course.title,
+            'course_title': course.get_display_title(),
             'total_students': len(students_data),
             'students': students_data
         }), 200
@@ -3890,6 +5366,10 @@ def upload_document():
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             file.save(file_path)
 
+            # Build URL/path for static serving
+            rel_prefix = app.config.get('DOCUMENTS_RELATIVE_URL_PREFIX', 'uploads/documents')
+            rel_path = f"{rel_prefix}/{filename}"
+
             # Create response object
             response_data = {
                 'message': 'Document uploaded successfully',
@@ -3899,7 +5379,8 @@ def upload_document():
                     'subject': subject,
                     'doi_link': doi_link,
                     'video_link': video_link,
-                    'document_path': filename,
+                    'path': rel_path,
+                    'url': build_media_url(rel_path),
                     'upload_date': datetime.datetime.now().isoformat()
                 }
             }
@@ -3911,6 +5392,33 @@ def upload_document():
             'error': 'An error occurred while processing your request',
             'message': str(e)
         }), 500
+
+# List uploaded documents
+@app.route('/api/documents', methods=['GET'])
+@cross_origin()
+@jwt_required()
+def list_documents():
+    try:
+        docs_dir = app.config['DOCUMENTS_UPLOAD_FOLDER']
+        rel_prefix = app.config.get('DOCUMENTS_RELATIVE_URL_PREFIX', 'uploads/documents')
+        ensure_dir(docs_dir)
+
+        items = []
+        for name in sorted(os.listdir(docs_dir)):
+            path = os.path.join(docs_dir, name)
+            if os.path.isfile(path):
+                rel_path = f"{rel_prefix}/{name}"
+                items.append({
+                    'filename': name,
+                    'size': os.path.getsize(path),
+                    'path': rel_path,
+                    'url': build_media_url(rel_path),
+                    'modified': datetime.datetime.fromtimestamp(os.path.getmtime(path)).isoformat()
+                })
+
+        return jsonify({ 'documents': items }), 200
+    except Exception as e:
+        return jsonify({ 'error': 'Failed to list documents', 'message': str(e) }), 500
 
 # PostVote model
 class PostVote(db.Model):
@@ -3933,6 +5441,49 @@ class PostComment(db.Model):
     
     user = db.relationship('User', backref=db.backref('post_comments', lazy='dynamic'))
     post = db.relationship('UserPost', backref=db.backref('comments', lazy='dynamic'))
+
+# PostShare model
+class PostShare(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # who shared
+    post_id = db.Column(db.Integer, db.ForeignKey('user_post.id'), nullable=False)  # original post
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now)
+
+    user = db.relationship('User', backref=db.backref('post_shares', lazy='dynamic'))
+    post = db.relationship('UserPost', backref=db.backref('shares', lazy='dynamic'))
+
+# SavedPost (Bookmarks) model
+class SavedPost(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('user_post.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now)
+
+    user = db.relationship('User', backref=db.backref('saved_posts', lazy='dynamic'))
+    post = db.relationship('UserPost', backref=db.backref('saved_by', lazy='dynamic'))
+
+# Tracks when a user reads a UserPost
+class UserPostRead(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('user_post.id'), nullable=False)
+    read_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now)
+
+    user = db.relationship('User', backref=db.backref('post_reads', lazy='dynamic'))
+    post = db.relationship('UserPost', backref=db.backref('reads', lazy='dynamic'))
+
+def record_read(user_id, post_id):
+    try:
+        rr = UserPostRead.query.filter_by(user_id=user_id, post_id=post_id).first()
+        if rr:
+            rr.read_at = datetime.datetime.now()
+        else:
+            db.session.add(UserPostRead(user_id=user_id, post_id=post_id, read_at=datetime.datetime.now()))
+        db.session.commit()
+        return True
+    except Exception:
+        db.session.rollback()
+        return False
 
 @app.route('/user/posts/<int:post_id>/vote', methods=['POST'])
 @jwt_required()
@@ -3982,6 +5533,14 @@ def vote_on_post(post_id):
 
     try:
         db.session.commit()
+        # Notify post author (if regular user and not the voter)
+        try:
+            if post.user_id != user.id and post.user and is_regular_user(post.user):
+                action = 'upvoted' if vote_type == 'upvote' else 'downvoted'
+                notify_user(post.user_id, f"{user.full_name} {action} your post: {post.title}")
+        except Exception:
+            pass
+        record_read(user.id, post_id)
         return jsonify({
             'message': 'Vote recorded successfully',
             'upvote_count': post.upvote_count,
@@ -4014,6 +5573,13 @@ def add_comment(post_id):
     try:
         db.session.add(comment)
         db.session.commit()
+        # Notify post author (if regular user and not the commenter)
+        try:
+            if post.user_id != user.id and post.user and is_regular_user(post.user):
+                notify_user(post.user_id, f"{user.full_name} commented on your post: {post.title}")
+        except Exception:
+            pass
+        record_read(user.id, post_id)
         return jsonify({
             'message': 'Comment added successfully',
             'comment': {
@@ -4051,6 +5617,202 @@ def get_comments(post_id):
     } for comment in comments]
 
     return jsonify(comments_data), 200
+
+@app.route('/user/posts/<int:post_id>/share', methods=['POST'])
+@jwt_required()
+def share_post(post_id):
+    """Share/Repost a post. Creates a PostShare if not already shared by this user.
+    Returns 200 whether newly shared or already shared (idempotent)."""
+    user_email = get_jwt_identity()
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    post = UserPost.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+
+    existing = PostShare.query.filter_by(user_id=user.id, post_id=post_id).first()
+    if existing:
+        return jsonify({'message': 'Post already shared'}), 200
+
+    try:
+        share = PostShare(user_id=user.id, post_id=post_id)
+        db.session.add(share)
+        db.session.commit()
+        # Notify original author
+        try:
+            if post.user_id != user.id and post.user and is_regular_user(post.user):
+                notify_user(post.user_id, f"{user.full_name} shared your post: {post.title}")
+        except Exception:
+            pass
+        record_read(user.id, post_id)
+        return jsonify({'message': 'Post shared successfully'}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/user/posts/<int:post_id>/save', methods=['POST'])
+@jwt_required()
+def save_post(post_id):
+    """Bookmark a post for the current user. Idempotent: second call returns 200."""
+    user_email = get_jwt_identity()
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    post = UserPost.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+
+    existing = SavedPost.query.filter_by(user_id=user.id, post_id=post_id).first()
+    if existing:
+        return jsonify({'message': 'Post already saved'}), 200
+
+    try:
+        saved = SavedPost(user_id=user.id, post_id=post_id)
+        db.session.add(saved)
+        db.session.commit()
+        record_read(user.id, post_id)
+        return jsonify({'message': 'Post saved successfully'}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/user/saved_posts', methods=['GET'])
+@jwt_required()
+def get_saved_posts():
+    """Return posts bookmarked by the current user, newest first."""
+    user_email = get_jwt_identity()
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    saved = SavedPost.query.filter_by(user_id=user.id).order_by(SavedPost.created_at.desc()).all()
+    posts_data = []
+    for s in saved:
+        p = s.post
+        if not p:
+            continue
+        author = p.user
+        author_info = None
+        if author:
+            author_info = {
+                'id': author.id,
+                'full_name': author.full_name,
+                'profile_image': author.profile_image
+            }
+        posts_data.append({
+            'id': p.id,
+            'title': p.title,
+            'executive_summary': p.executive_summary,
+            'subject': p.subject,
+            'doi_link': p.doi_link,
+            'video_link': p.video_link,
+            'document_path': p.document_path,
+            'created_at': p.created_at,
+            'author': author_info
+        })
+
+    return jsonify(posts_data), 200
+
+@app.route('/user/posts/<int:post_id>/read', methods=['POST'])
+@jwt_required()
+def mark_post_read(post_id):
+    """Explicitly mark a post as read for the current user."""
+    user_email = get_jwt_identity()
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    post = UserPost.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+    ok = record_read(user.id, post_id)
+    if not ok:
+        return jsonify({'error': 'Failed to record read'}), 500
+    return jsonify({'message': 'Read recorded'}), 200
+
+@app.route('/user/posts/recent', methods=['GET'])
+@jwt_required()
+def get_recent_user_posts():
+    """Return the authenticated user's recently read posts with pagination.
+
+    Query params:
+      - page (int, default=1)
+      - per_page (int, default=10)
+      - snippet_length (int, default=140) for preview
+    """
+    try:
+        current_user_email = get_jwt_identity()
+        current_user = User.query.filter_by(email=current_user_email).first()
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        preview_len = request.args.get('snippet_length', default=140, type=int)
+
+        reads_pagination = (
+            UserPostRead.query
+            .filter_by(user_id=current_user.id)
+            .order_by(UserPostRead.read_at.desc())
+            .paginate(page=page, per_page=per_page, error_out=False)
+        )
+
+        items = []
+        for r in reads_pagination.items:
+            p = UserPost.query.get(r.post_id)
+            if not p:
+                continue
+            created = p.created_at or datetime.datetime.now()
+            date_str = created.strftime('%b %d')
+            year_str = created.strftime('%Y')
+
+            author_info = None
+            if getattr(p, 'user', None):
+                author_info = {
+                    'id': p.user.id,
+                    'full_name': p.user.full_name,
+                    'profile_image': p.user.profile_image
+                }
+
+            exec_sum = getattr(p, 'executive_summary', '') or ''
+            preview = (exec_sum[:preview_len] + '…') if len(exec_sum) > preview_len else exec_sum
+
+            items.append({
+                'id': p.id,
+                'title': p.title,
+                'subject': p.subject,
+                'executive_summary': exec_sum,
+                'preview': preview,
+                'doi_link': getattr(p, 'doi_link', None),
+                'video_link': getattr(p, 'video_link', None),
+                'document_path': getattr(p, 'document_path', None),
+                'created_at': p.created_at,
+                'date': date_str,
+                'year': year_str,
+                'user': author_info,
+                'read_at': r.read_at
+            })
+
+        response = {
+            'status': 'success',
+            'data': {
+                'posts': items,
+                'pagination': {
+                    'total_items': reads_pagination.total,
+                    'total_pages': reads_pagination.pages,
+                    'current_page': reads_pagination.page,
+                    'per_page': reads_pagination.per_page,
+                    'has_next': reads_pagination.has_next,
+                    'has_prev': reads_pagination.has_prev
+                }
+            }
+        }
+
+        return jsonify(response), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/user/posts/<int:post_id>', methods=['PUT'])
 @jwt_required()
@@ -4124,11 +5886,49 @@ def delete_user_post(post_id):
         # Delete associated votes and comments
         PostVote.query.filter_by(post_id=post_id).delete()
         PostComment.query.filter_by(post_id=post_id).delete()
-        
+        # Also delete read-history and saved/shared references to prevent FK issues
+        try:
+            UserPostRead.query.filter_by(post_id=post_id).delete()
+        except Exception:
+            pass
+        try:
+            SavedPost.query.filter_by(post_id=post_id).delete()
+        except Exception:
+            pass
+        try:
+            PostShare.query.filter_by(post_id=post_id).delete()
+        except Exception:
+            pass
+
+        # Attempt to delete attached document file if present
+        doc_ref = getattr(post, 'document_path', None)
+        try:
+            if doc_ref:
+                delete_path = None
+                # Absolute path stored
+                if os.path.isabs(doc_ref):
+                    delete_path = doc_ref
+                else:
+                    # Normalize
+                    norm = doc_ref.lstrip('/')
+                    if norm.startswith('uploads/'):
+                        # Relative to Flask static folder
+                        delete_path = os.path.join(os.path.join(app.root_path, 'static'), norm)
+                    else:
+                        # Treat as plain filename under documents folder
+                        delete_path = os.path.join(app.config['DOCUMENTS_UPLOAD_FOLDER'], norm)
+
+                # Safety: ensure we only delete within our project tree
+                if delete_path and os.path.exists(delete_path):
+                    os.remove(delete_path)
+        except Exception:
+            # Ignore file deletion errors to not block post deletion
+            pass
+
         # Delete the post
         db.session.delete(post)
         db.session.commit()
-        return jsonify({'message': 'Post deleted successfully'}), 200
+        return jsonify({'message': 'Post and associated file (if any) deleted successfully'}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -4348,7 +6148,7 @@ def get_course_statistics():
             'price_distribution': price_distribution,
             'popular_courses': [{
                 'id': course.id,
-                'title': course.title,
+                'title': course.get_display_title(),
                 'student_count': count,
                 'instructor': course.author.full_name if course.author else 'Unknown'
             } for course, count in popular_courses]
@@ -4773,74 +6573,106 @@ def get_role_permissions(role_id):
 
 @app.route('/courses/with-modules', methods=['POST'])
 @jwt_required()
-def create_course_with_modules():
+def create_courses_with_modules():
     try:
         # Get current user from token
         current_user_id = get_jwt_identity()
-        
+
         # Check if user is admin or instructor directly without User model
         admin = Admin.query.filter_by(id=current_user_id).first()
         instructor = Instructor.query.filter_by(id=current_user_id).first()
-        
+
         if not admin and not instructor:
             return jsonify({'error': 'Only admins and instructors can create courses'}), 403
 
         data = request.get_json()
-        
-        # Validate course data exists
-        if 'course' not in data:
-            return jsonify({'error': 'Course data is required'}), 400
-            
-        course_data = data['course']
-        
-        # Validate required course fields
-        required_fields = ['titles', 'course_name', 'content', 'price']
-        for field in required_fields:
-            if field not in course_data:
-                return jsonify({'error': f'Missing required course field: {field}'}), 400
 
-        # Create new course
-        course = Course(
-            title=course_data['titles'],
-            course_name=course_data['course_name'],
-            content=course_data['content'],
-            price=course_data['price'],
-            brief=course_data.get('brief'),
-            course_type=course_data.get('course_type'),
-            additional_resources=course_data.get('additional_resources'),
-            author_id=admin.id if admin else instructor.id,  # Set the actual admin/instructor ID
-            instructor_id=instructor.id if instructor else None
-        )
-        
-        db.session.add(course)
-        db.session.flush()  # This assigns an ID to the course
-        
-        # Handle modules if provided
-        if 'modules' in data and isinstance(data['modules'], list):
-            for module_data in data['modules']:
-                # Validate required module fields
-                if not all(key in module_data for key in ['name', 'title', 'description', 'content']):
-                    return jsonify({'error': 'Each module must have name, title, description, and content'}), 400
-                    
-                module = Module(
-                    name=module_data['name'],
-                    title=module_data['title'],
-                    description=module_data['description'],
-                    content=module_data['content'],
-                    additional_resources=module_data.get('additional_resources'),
-                    media_file=module_data.get('media_file'),
-                    order=module_data.get('order', 0),
-                    course_id=course.id
-                )
-                db.session.add(module)
-        
+        # Validate modules data exists
+        if 'modules' not in data:
+            return jsonify({'error': 'Modules data is required'}), 400
+
+        modules_data = data['modules']
+        if not isinstance(modules_data, list) or len(modules_data) == 0:
+            return jsonify({'error': 'Modules must be a non-empty array'}), 400
+
+        created_modules = []
+        created_courses = []
+
+        # Process each module
+        for module_index, module_data in enumerate(modules_data):
+            # Validate required module fields
+            if not all(key in module_data for key in ['name', 'title', 'description']):
+                return jsonify({'error': 'Each module must have name, title, and description'}), 400
+
+            # Create module
+            module = Module(
+                name=module_data['name'],
+                title=module_data['title'],
+                description=module_data['description'],
+                content=module_data.get('content', ''),
+                additional_resources=module_data.get('additional_resources'),
+                media_file=module_data.get('media_file'),
+                order=module_data.get('order', module_index + 1),
+                is_template=False
+            )
+
+            db.session.add(module)
+            db.session.flush()  # Get module ID
+
+            # Handle courses within the module
+            if 'courses' in module_data and isinstance(module_data['courses'], list):
+                for course_index, course_data in enumerate(module_data['courses']):
+                    # Validate required course fields
+                    if not all(key in course_data for key in ['title', 'course_name', 'content', 'price']):
+                        return jsonify({'error': 'Each course must have title, course_name, content, and price'}), 400
+
+                    # Create course
+                    # Ensure title is always stored as an array
+                    title = course_data['title']
+                    if not isinstance(title, list):
+                        title = [title]
+
+                    course = Course(
+                        title=title,
+                        course_name=course_data['course_name'],
+                        content=course_data['content'],
+                        price=course_data['price'],
+                        brief=course_data.get('brief'),
+                        course_type=course_data.get('course_type'),
+                        additional_resources=course_data.get('additional_resources'),
+                        author_id=admin.id if admin else instructor.id,
+                        instructor_id=instructor.id if instructor else None,
+                        module_id=module.id,
+                        order=course_data.get('order', course_index + 1),
+                        status='published'
+                    )
+
+                    db.session.add(course)
+                    db.session.flush()
+
+                    created_courses.append({
+                        'id': course.id,
+                        'title': course.get_all_titles(),  # Return full title array
+                        'course_name': course.course_name,
+                        'module_id': module.id
+                    })
+
+            created_modules.append({
+                'id': module.id,
+                'name': module.name,
+                'courses_count': len(module_data.get('courses', []))
+            })
+
         db.session.commit()
-        
+
         return jsonify({
-            'message': 'Course and modules created successfully',
-            'course_id': course.id
+            'message': 'Modules and courses created successfully',
+            'modules': created_modules,
+            'courses': created_courses,
+            'total_modules': len(created_modules),
+            'total_courses': len(created_courses)
         }), 201
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -4853,37 +6685,25 @@ def assign_module_to_course(course_id, module_id):
         course = Course.query.get_or_404(course_id)
         module = Module.query.get_or_404(module_id)
         
-        # Check if module is already assigned to this course
-        if module.course_id == course_id:
-            return jsonify({'message': 'Module is already assigned to this course'}), 400
-            
-        # If module is a template, create a new instance
-        if module.is_template:
-            new_module = Module(
-                name=module.name,
-                title=module.title,
-                description=module.description,
-                content=module.content,
-                course_id=course_id,
-                order=len(course.modules.all()) + 1,  # Add at the end
-                additional_resources=module.additional_resources,
-                media_file=module.media_file,
-                is_template=False
-            )
-            db.session.add(new_module)
-        else:
-            # If module is not a template, just update its course
-            module.course_id = course_id
-            module.order = len(course.modules.all()) + 1
-            
-        # Update course module count
-        course.number_of_modules = len(course.modules.all()) + 1
-        
+        # Check if course is already assigned to this module
+        if course.module_id == module_id:
+            return jsonify({'message': 'Course is already assigned to this module'}), 400
+
+        # Get highest order for courses in this module
+        highest_order = db.session.query(func.max(Course.order)).filter(Course.module_id == module_id).scalar()
+        next_order = 1 if highest_order is None else highest_order + 1
+
+        # Assign course to module
+        course.module_id = module_id
+        course.order = next_order
+
         db.session.commit()
-        
+
         return jsonify({
-            'message': 'Module assigned to course successfully',
-            'module_id': new_module.id if module.is_template else module.id
+            'message': 'Course assigned to module successfully',
+            'course_id': course_id,
+            'module_id': module_id,
+            'order': next_order
         }), 200
         
     except Exception as e:
@@ -4941,7 +6761,7 @@ def assign_course():
         # Create notification for instructor
         notification = Notification(
             user_id=instructor.id,
-            content=f'You have been assigned to teach the course: {course.title}',
+            content=f'You have been assigned to teach the course: {course.get_display_title()}',
             is_read=False
         )
         db.session.add(notification)
@@ -4951,7 +6771,7 @@ def assign_course():
             'message': 'Course assigned successfully',
             'data': {
                 'course_id': course.id,
-                'course_title': course.title,
+                'course_title': course.get_display_title(),
                 'instructor_id': instructor.id,
                 'instructor_name': instructor.full_name,
                 'amount': amount
@@ -4975,7 +6795,7 @@ def get_course_dropdown_data():
         courses = Course.query.all()
         courses_data = [{
             'id': course.id,
-            'title': course.title,
+            'title': course.get_all_titles(),  # Return full title array
             'course_name': course.course_name,
             'category_id': course.categories[0].id if course.categories else None,
             'course_type': course.course_type
@@ -5035,12 +6855,12 @@ def get_course_titles():
     course_name = request.args.get('course_name')
     if not category_id or not course_type or not course_name:
         return jsonify({'error': 'category_id, course_type, and course_name are required'}), 400
-    titles = db.session.query(Course.id, Course.title).join(Course.categories).filter(
+    courses = db.session.query(Course).join(Course.categories).filter(
         CourseCategory.id == category_id,
         Course.course_type == course_type,
         Course.course_name == course_name
     ).all()
-    return jsonify([{'id': t[0], 'title': t[1]} for t in titles]), 200
+    return jsonify([{'id': course.id, 'title': course.get_all_titles()} for course in courses]), 200
 
 # Get all available instructors
 @app.route('/admin/instructors-list', methods=['GET'])
@@ -5104,6 +6924,232 @@ def get_instructor_course_options():
         app.logger.error(f"Error getting course upload options: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/instructor/upload-course', methods=['GET'])
+@jwt_required()
+def get_instructor_upload_info():
+    try:
+        # Get instructor directly from token
+        instructor_id = get_jwt_identity()
+        instructor = db.session.get(Instructor, instructor_id)
+
+        if not instructor:
+            return jsonify({'error': 'Only instructors can access this endpoint'}), 403
+
+        # Pagination params
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+
+        # Filter params (mirror /courses)
+        course_type = request.args.get('course_type')
+        category = request.args.get('category')
+        price_min = request.args.get('price_min', type=float)
+        price_max = request.args.get('price_max', type=float)
+        search_keyword = request.args.get('search')
+
+        # Build query scoped to this instructor
+        query = Course.query.filter(
+            (Course.instructor_id == instructor_id) | (Course.author_id == instructor_id)
+        )
+
+        # Apply filters (same as /courses)
+        if course_type:
+            query = query.filter(Course.course_type == course_type)
+        if category:
+            query = query.join(Course.categories).filter(CourseCategory.name == category)
+            query = query.options(db.joinedload(Course.categories))
+        else:
+            query = query.options(db.joinedload(Course.categories))
+        if price_min is not None:
+            query = query.filter(Course.price >= price_min)
+        if price_max is not None:
+            query = query.filter(Course.price <= price_max)
+        if search_keyword:
+            search = f"%{search_keyword}%"
+            query = query.filter(
+                or_(
+                    Course.course_name.ilike(search),
+                    Course.content.ilike(search),
+                    Course.brief.ilike(search)
+                )
+            )
+
+        # Order like /courses
+        query = query.order_by(Course.date_created.desc(), Course.id.desc())
+
+        # Paginate
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        courses = pagination.items
+
+        courses_data = []
+        for course in courses:
+            # Determine module information (direct or inferred via ModuleData)
+            module_data = None
+            target_module = None
+            if course.module_id:
+                target_module = db.session.get(Module, course.module_id)
+            if not target_module:
+                md = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).first()
+                if md:
+                    target_module = db.session.get(Module, md.module_id)
+            if target_module:
+                # Build module's data_entries to match creation format
+                module_entries_template = ModuleData.query.filter_by(module_id=target_module.id).order_by(ModuleData.order).all()
+                module_data_entries = [
+                    {
+                        'id': de.id,
+                        'title': de.title,
+                        'content': de.content,
+                        'additional_resources': build_media_url(de.additional_resources),
+                        'media_file': build_media_url(de.media_file),
+                        'course_id': de.course_id,
+                        'order': de.order
+                    }
+                    for de in module_entries_template
+                ]
+
+                module_data = {
+                    'id': target_module.id,
+                    'name': target_module.name,
+                    'description': target_module.description,
+                    'order': target_module.order,
+                    'is_template': target_module.is_template,
+                    'data_entries': module_data_entries,
+                    'data_count': len(module_data_entries)
+                }
+
+            # Gather ModuleData entries (modules/lessons for this course). If none exist,
+            # fall back to module template entries using course.module_id.
+            md_entries = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).all()
+            if not md_entries and course.module_id:
+                md_entries = ModuleData.query.filter_by(module_id=course.module_id).order_by(ModuleData.order).all()
+            md_count = len(md_entries)
+            modules_array = [
+                {
+                    'id': md.id,
+                    'title': md.title,
+                    'content': md.content,
+                    'additional_resources': build_media_url(md.additional_resources),
+                    'media_file': build_media_url(md.media_file),
+                    'order': md.order,
+                    'module_id': md.module_id
+                }
+                for md in md_entries
+            ]
+
+            # Build modules_list_resp for this course (group by module)
+            modules_map = {}
+            md_for_course = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.module_id, ModuleData.order).all()
+            for mde in md_for_course:
+                mod = db.session.get(Module, mde.module_id) if mde.module_id else None
+                key = mde.module_id if mde.module_id else 0
+                if key not in modules_map:
+                    modules_map[key] = {
+                        'id': mod.id if mod else None,
+                        'name': mod.name if mod else None,
+                        'description': mod.description if mod else None,
+                        'order': mod.order if mod else None,
+                        'is_template': mod.is_template if mod else False,
+                        'data': []
+                    }
+                modules_map[key]['data'].append({
+                    'title': mde.title,
+                    'content': mde.content,
+                    'additional_resources': build_media_url(mde.additional_resources),
+                    'media_file': build_media_url(mde.media_file),
+                    'course_id': mde.course_id,
+                    'order': mde.order
+                })
+
+            if not modules_map and course.module_id:
+                tm = db.session.get(Module, course.module_id)
+                if tm:
+                    template_entries = ModuleData.query.filter_by(module_id=tm.id).order_by(ModuleData.order).all()
+                    modules_map[tm.id] = {
+                        'id': tm.id,
+                        'name': tm.name,
+                        'description': tm.description,
+                        'order': tm.order,
+                        'is_template': tm.is_template,
+                        'data': [{
+                            'title': te.title,
+                            'content': te.content,
+                            'additional_resources': build_media_url(te.additional_resources),
+                            'media_file': build_media_url(te.media_file),
+                            'course_id': te.course_id,
+                            'order': te.order
+                        } for te in template_entries]
+                    }
+
+            modules_list_resp = list(modules_map.values())
+
+            course_dict = {
+                'id': course.id,
+                'title': course.get_all_titles(),
+                'course_name': course.course_name,
+                'image': build_media_url(course.image),
+                'content': course.content,
+                'video': build_media_url(course.video),
+                'brief': course.brief,
+                'module_entries_count': md_count,
+                'course_type': course.course_type,
+                'price': course.price,
+                'status': course.status,
+                'additional_resources': build_media_url(course.additional_resources),
+                'module': module_data,
+                'has_module': True if module_data else False,
+                'module_entries': modules_array,
+                'modules': modules_list_resp,
+                'module_id': course.module_id,
+                'date_created': course.date_created.isoformat() if course.date_created else None,
+                'last_updated': course.last_updated.isoformat() if course.last_updated else None,
+                'categories': [category.name for category in course.categories],
+                'student_count': course.student_count
+            }
+
+            # Author info (mirror /courses)
+            if course.is_admin_author:
+                admin = Admin.query.filter_by(id=course.author_id).first()
+                if admin:
+                    course_dict['author'] = {
+                        'id': admin.id,
+                        'full_name': admin.fullname,
+                        'email': admin.email,
+                        'type': 'admin'
+                    }
+                else:
+                    course_dict['author'] = 'Unknown'
+            else:
+                inst = None
+                if course.instructor_id:
+                    inst = db.session.get(Instructor, course.instructor_id)
+                if not inst:
+                    inst = db.session.get(Instructor, course.author_id)
+                if inst:
+                    course_dict['author'] = {
+                        'id': inst.id,
+                        'full_name': inst.full_name,
+                        'email': inst.email,
+                        'type': 'instructor'
+                    }
+                else:
+                    course_dict['author'] = 'Unknown'
+
+            courses_data.append(course_dict)
+
+        return jsonify({
+            'items': courses_data,
+            'total': pagination.total,
+            'pages': pagination.pages,
+            'current_page': page,
+            'has_next': pagination.has_next,
+            'has_prev': pagination.has_prev,
+            'next_page': pagination.next_num if pagination.has_next else None,
+            'prev_page': pagination.prev_num if pagination.has_prev else None
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/instructor/upload-course', methods=['POST'])
 @jwt_required()
 def instructor_upload_course():
@@ -5111,86 +7157,410 @@ def instructor_upload_course():
         # Get instructor directly from token
         instructor_id = get_jwt_identity()
         instructor = Instructor.query.get(instructor_id)
-        
         if not instructor:
             return jsonify({'error': 'Only instructors can upload courses'}), 403
 
-        data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['titles', 'course_name', 'content', 'price', 'category_id', 'number_of_modules']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+        data = request.get_json() if request.is_json else request.form
 
-        # Validate titles array
-        if not isinstance(data['titles'], list) or len(data['titles']) == 0:
-            return jsonify({'error': 'Titles must be a non-empty array'}), 400
+        # Normalize payload to list of course dicts (align with /courses)
+        courses_payload = []
+        if 'courses' in data:
+            if not isinstance(data['courses'], list) or len(data['courses']) == 0:
+                return jsonify({'error': 'Courses must be a non-empty array'}), 400
+            courses_payload = data['courses']
+        elif 'titles' in data:
+            titles = data['titles']
+            if isinstance(titles, list):
+                for idx, t in enumerate(titles):
+                    courses_payload.append({
+                        'title': t,
+                        'course_name': data.get('course_name'),
+                        'content': data.get('content'),
+                        'price': data.get('price'),
+                        'brief': data.get('brief'),
+                        'course_type': data.get('course_type'),
+                        'additional_resources': data.get('additional_resources'),
+                        'image': data.get('image'),
+                        'video': data.get('video'),
+                        'module_id': data.get('module_id'),
+                        'order': data.get('order', idx + 1) if data.get('module_id') else None
+                    })
+            else:
+                courses_payload.append({
+                    'title': titles,
+                    'course_name': data.get('course_name'),
+                    'content': data.get('content'),
+                    'price': data.get('price'),
+                    'brief': data.get('brief'),
+                    'course_type': data.get('course_type'),
+                    'additional_resources': data.get('additional_resources'),
+                    'image': data.get('image'),
+                    'video': data.get('video'),
+                    'module_id': data.get('module_id'),
+                    'order': data.get('order')
+                })
+        else:
+            return jsonify({'error': 'Either "courses" (array) or "titles" (string/array) is required'}), 400
 
-        # Validate category exists
-        category = CourseCategory.query.get(data['category_id'])
-        if not category:
-            return jsonify({'error': 'Invalid category'}), 400
+        # Validate required fields per course
+        for idx, c in enumerate(courses_payload):
+            for field in ['title', 'course_name', 'content', 'price']:
+                if c.get(field) in (None, ''):
+                    return jsonify({'error': f'Missing required course field: {field} at index {idx}'}), 400
 
-        # Validate number_of_modules is in acceptable range
-        if not (1 <= data['number_of_modules'] <= 20):
-            return jsonify({'error': 'Number of modules must be between 1 and 20'}), 400
+        # Resolve categories: prefer root categories list (names), fallback to category_id
+        resolved_categories = []
+        if 'categories' in data:
+            cats = data.get('categories')
+            if not isinstance(cats, list) or len(cats) == 0:
+                return jsonify({'error': 'Categories must be a non-empty list'}), 400
+            for name in cats:
+                if not isinstance(name, str) or not name.strip():
+                    return jsonify({'error': 'Category names must be non-empty strings'}), 400
+                cat = CourseCategory.query.filter_by(name=name).first()
+                if not cat:
+                    cat = CourseCategory(name=name)
+                    db.session.add(cat)
+                    db.session.flush()
+                resolved_categories.append(cat)
+        elif 'category_id' in data:
+            cat = db.session.get(CourseCategory, data.get('category_id'))
+            if not cat:
+                return jsonify({'error': 'Invalid category'}), 400
+            resolved_categories.append(cat)
+        else:
+            return jsonify({'error': 'Provide either categories (list) or category_id'}), 400
 
-        # Create courses for each title
         created_courses = []
-        for title in data['titles']:
+
+        for course_index, course_data in enumerate(courses_payload):
+            title = course_data['title']
+            if not isinstance(title, list):
+                title = [title]
+
             course = Course(
                 title=title,
-                course_name=data['course_name'],
-                content=data['content'],
-                price=data['price'],
-                brief=data.get('brief'),
-                course_type=data.get('course_type'),
-                additional_resources=data.get('additional_resources'),
+                course_name=course_data['course_name'],
+                content=course_data['content'],
+                price=course_data['price'],
+                brief=course_data.get('brief'),
+                course_type=course_data.get('course_type'),
+                additional_resources=course_data.get('additional_resources'),
+                image=course_data.get('image'),
+                video=course_data.get('video'),
                 author_id=instructor.id,
                 instructor_id=instructor.id,
-                number_of_modules=data['number_of_modules'],
-                status='draft'  # Default status for instructor uploads
+                module_id=course_data.get('module_id'),
+                order=course_data.get('order', course_index + 1),
+                status='published'
             )
-            
-            # Add category
-            course.categories.append(category)
 
-            # Handle image if provided in base64
-            if 'image_base64' in data:
-                try:
-                    # Save base64 image and set course.image path
-                    image_data = data['image_base64'].split(',')[1]
-                    image_binary = base64.b64decode(image_data)
-                    filename = f"course_{int(time.time())}_{secure_filename(title)}.jpg"
-                    image_path = os.path.join(app.config['UPLOAD_FOLDER'], 'courses', filename)
-                    os.makedirs(os.path.dirname(image_path), exist_ok=True)
-                    
-                    with open(image_path, 'wb') as f:
-                        f.write(image_binary)
-                    
-                    course.image = f'courses/{filename}'
-                except Exception as e:
-                    app.logger.error(f"Error processing image: {str(e)}")
+            # Attach categories
+            for cat in resolved_categories:
+                course.categories.append(cat)
+
+            # Enforce Cloudinary-only URLs if present in payload
+            if course.image and not is_cloudinary_url(course.image):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for image'}), 400
+            if course.video and not is_cloudinary_url(course.video):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for video'}), 400
+            if course.additional_resources and not is_cloudinary_url(course.additional_resources):
+                return jsonify({'error': 'Only Cloudinary URLs are allowed for additional_resources'}), 400
+
+            # Use root-level files (multipart) if provided and course lacks URLs
+            if 'image' in request.files and not course.image:
+                image = request.files['image']
+                if image and allowed_image(image.filename):
+                    try:
+                        course.image = upload_to_cloudinary(image, folder='courses', resource_type='image')
+                    except Exception as e:
+                        app.logger.error(f"Cloudinary image upload failed: {str(e)}")
+            if 'video' in request.files and not course.video:
+                video = request.files['video']
+                if video and allowed_video(video.filename):
+                    try:
+                        course.video = upload_to_cloudinary(video, folder='course_videos', resource_type='video')
+                    except Exception as e:
+                        app.logger.error(f"Cloudinary video upload failed: {str(e)}")
+            if 'additional_resources' in request.files and not course.additional_resources:
+                resources_file = request.files['additional_resources']
+                if resources_file and (allowed_doc(resources_file.filename) or allowed_image(resources_file.filename) or allowed_video(resources_file.filename)):
+                    try:
+                        course.additional_resources = upload_to_cloudinary(resources_file, folder='courses/resources', resource_type='auto')
+                    except Exception as e:
+                        app.logger.error(f"Cloudinary additional resource upload failed: {str(e)}")
 
             db.session.add(course)
-            db.session.flush()  # Ensure course.id is assigned
-            created_courses.append({
+            db.session.flush()
+
+            # Build detailed response for each created course (mirror GET behavior)
+            # Determine module information (direct or inferred via ModuleData)
+            module_data = None
+            target_module = None
+            if course.module_id:
+                target_module = db.session.get(Module, course.module_id)
+            if not target_module:
+                md_first = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).first()
+                if md_first:
+                    target_module = db.session.get(Module, md_first.module_id)
+            if target_module:
+                # Build module's data_entries to match creation format
+                module_entries_template = ModuleData.query.filter_by(module_id=target_module.id).order_by(ModuleData.order).all()
+                module_data_entries = [
+                    {
+                        'id': de.id,
+                        'title': de.title,
+                        'content': de.content,
+                        'additional_resources': build_media_url(de.additional_resources),
+                        'media_file': build_media_url(de.media_file),
+                        'course_id': de.course_id,
+                        'order': de.order
+                    }
+                    for de in module_entries_template
+                ]
+
+                module_data = {
+                    'id': target_module.id,
+                    'name': target_module.name,
+                    'description': target_module.description,
+                    'order': target_module.order,
+                    'is_template': target_module.is_template,
+                    'data_entries': module_data_entries,
+                    'data_count': len(module_data_entries)
+                }
+
+            # Gather ModuleData entries; fallback to module template entries
+            md_entries = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.order).all()
+            if not md_entries and course.module_id:
+                md_entries = ModuleData.query.filter_by(module_id=course.module_id).order_by(ModuleData.order).all()
+            md_count = len(md_entries)
+            modules_array = [
+                {
+                    'id': md.id,
+                    'title': md.title,
+                    'content': md.content,
+                    'additional_resources': build_media_url(md.additional_resources),
+                    'media_file': build_media_url(md.media_file),
+                    'order': md.order,
+                    'module_id': md.module_id
+                }
+                for md in md_entries
+            ]
+
+            # Build new modules structure for instructor POST response
+            modules_map = {}
+            md_for_course = ModuleData.query.filter_by(course_id=course.id).order_by(ModuleData.module_id, ModuleData.order).all()
+            for mde in md_for_course:
+                mod = db.session.get(Module, mde.module_id) if mde.module_id else None
+                key = mde.module_id if mde.module_id else 0
+                if key not in modules_map:
+                    modules_map[key] = {
+                        'id': mod.id if mod else None,
+                        'name': mod.name if mod else None,
+                        'description': mod.description if mod else None,
+                        'order': mod.order if mod else None,
+                        'is_template': mod.is_template if mod else False,
+                        'data': []
+                    }
+                modules_map[key]['data'].append({
+                    'title': mde.title,
+                    'content': mde.content,
+                    'additional_resources': build_media_url(mde.additional_resources),
+                    'media_file': build_media_url(mde.media_file),
+                    'course_id': mde.course_id,
+                    'order': mde.order
+                })
+
+            if not modules_map and course.module_id:
+                tm = db.session.get(Module, course.module_id)
+                if tm:
+                    template_entries = ModuleData.query.filter_by(module_id=tm.id).order_by(ModuleData.order).all()
+                    modules_map[tm.id] = {
+                        'id': tm.id,
+                        'name': tm.name,
+                        'description': tm.description,
+                        'order': tm.order,
+                        'is_template': tm.is_template,
+                        'data': [{
+                            'title': te.title,
+                            'content': te.content,
+                            'additional_resources': build_media_url(te.additional_resources),
+                            'media_file': build_media_url(te.media_file),
+                            'course_id': te.course_id,
+                            'order': te.order
+                        } for te in template_entries]
+                    }
+
+            modules_list_resp = list(modules_map.values())
+
+            course_dict = {
                 'id': course.id,
-                'title': course.title
-            })
+                'title': course.get_all_titles(),
+                'course_name': course.course_name,
+                'image': build_media_url(course.image),
+                'content': course.content,
+                'video': build_media_url(course.video),
+                'brief': course.brief,
+                'module_entries_count': md_count,
+                'course_type': course.course_type,
+                'price': course.price,
+                'status': course.status,
+                'additional_resources': build_media_url(course.additional_resources),
+                'module': module_data,
+                'has_module': True if module_data else False,
+                'module_entries': modules_array,
+                'modules': modules_list_resp,
+                'module_id': course.module_id,
+                'date_created': course.date_created.isoformat() if course.date_created else None,
+                'last_updated': course.last_updated.isoformat() if course.last_updated else None,
+                'categories': [category.name for category in course.categories],
+                'student_count': course.student_count,
+            }
+
+            # Author is the instructor performing the upload
+            course_dict['author'] = {
+                'id': instructor.id,
+                'full_name': instructor.full_name,
+                'email': instructor.email,
+                'type': 'instructor'
+            }
+
+            created_courses.append(course_dict)
 
         db.session.commit()
 
         return jsonify({
             'message': 'Courses created successfully',
-            'courses': created_courses
+            'courses': created_courses,
+            'total_courses': len(created_courses)
         }), 201
 
     except Exception as e:
         db.session.rollback()
         app.logger.error(f"Error creating courses: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
+
+# Add courses to existing module
+@app.route('/modules/<int:module_id>/add-courses', methods=['POST'])
+@jwt_required()
+def add_courses_to_module(module_id):
+    try:
+        # Get current user from token
+        current_user_id = get_jwt_identity()
+
+        # Check if user is admin or instructor
+        admin = Admin.query.filter_by(id=current_user_id).first()
+        instructor = Instructor.query.filter_by(id=current_user_id).first()
+
+        if not admin and not instructor:
+            return jsonify({'error': 'Only admins and instructors can add courses to modules'}), 403
+
+        # Check if module exists
+        module = Module.query.get(module_id)
+        if not module:
+            return jsonify({'error': 'Module not found'}), 404
+
+        data = request.get_json()
+
+        # Validate courses array
+        if 'courses' not in data or not isinstance(data['courses'], list) or len(data['courses']) == 0:
+            return jsonify({'error': 'Courses array is required and must not be empty'}), 400
+
+        created_courses = []
+
+        # Get highest order for courses in this module
+        highest_order = db.session.query(func.max(Course.order)).filter(Course.module_id == module_id).scalar()
+        next_order = 1 if highest_order is None else highest_order + 1
+
+        for course_index, course_data in enumerate(data['courses']):
+            # Validate required course fields
+            required_fields = ['title', 'course_name', 'content', 'price']
+            for field in required_fields:
+                if field not in course_data:
+                    return jsonify({'error': f'Missing required course field: {field}'}), 400
+
+            # Create course
+            # Ensure title is always stored as an array
+            title = course_data['title']
+            if not isinstance(title, list):
+                title = [title]
+
+            course = Course(
+                title=title,
+                course_name=course_data['course_name'],
+                content=course_data['content'],
+                price=course_data['price'],
+                brief=course_data.get('brief'),
+                course_type=course_data.get('course_type'),
+                additional_resources=course_data.get('additional_resources'),
+                author_id=admin.id if admin else instructor.id,
+                instructor_id=instructor.id if instructor else None,
+                module_id=module_id,
+                order=course_data.get('order', next_order + course_index),
+                status='published'
+            )
+
+            # Handle category if provided
+            if 'category_id' in course_data:
+                category = CourseCategory.query.get(course_data['category_id'])
+                if category:
+                    course.categories.append(category)
+
+            # Enforce Cloudinary-only media for module course creation
+            # Accept only Cloudinary URLs for image/video/additional_resources. Reject base64 and local paths.
+            img_val = course_data.get('image')
+            vid_val = course_data.get('video')
+            res_val = course_data.get('additional_resources')
+
+            # Reject base64 data URIs explicitly
+            def is_data_uri(val):
+                return isinstance(val, str) and val.startswith('data:')
+
+            if img_val:
+                if is_data_uri(img_val):
+                    return jsonify({'error': 'Base64 image is not allowed. Provide a Cloudinary URL or upload as a file via the /courses endpoint.'}), 400
+                if not is_cloudinary_url(img_val):
+                    return jsonify({'error': 'Only Cloudinary URLs are allowed for image'}), 400
+                course.image = img_val
+
+            if vid_val:
+                if is_data_uri(vid_val):
+                    return jsonify({'error': 'Base64 video is not allowed. Provide a Cloudinary URL or upload as a file via the /courses endpoint.'}), 400
+                if not is_cloudinary_url(vid_val):
+                    return jsonify({'error': 'Only Cloudinary URLs are allowed for video'}), 400
+                course.video = vid_val
+
+            if res_val:
+                if is_data_uri(res_val):
+                    return jsonify({'error': 'Base64 additional_resources is not allowed. Provide a Cloudinary URL.'}), 400
+                if not is_cloudinary_url(res_val):
+                    return jsonify({'error': 'Only Cloudinary URLs are allowed for additional_resources'}), 400
+                course.additional_resources = res_val
+
+            db.session.add(course)
+            db.session.flush()  # Get course ID
+
+            created_courses.append({
+                'id': course.id,
+                'title': course.get_all_titles(),  # Return full title array
+                'course_name': course.course_name,
+                'module_id': module_id,
+                'order': course.order
+            })
+
+        db.session.commit()
+
+        return jsonify({
+            'message': f'Successfully added {len(created_courses)} courses to module',
+            'module_id': module_id,
+            'module_name': module.name,
+            'courses': created_courses,
+            'total_courses_added': len(created_courses)
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     with app.app_context():
