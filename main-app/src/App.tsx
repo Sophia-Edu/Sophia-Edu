@@ -11,7 +11,6 @@ import { loadStripe } from "@stripe/stripe-js";
 function App() {
 	const { status, message, onReset } = useAlert();
 	const stripePromise = loadStripe("your-publishable-key-here");
-	const helmetContext = {};
 	// Listen to changes in status and display toast accordingly
 	useEffect(() => {
 		if (status && message) {

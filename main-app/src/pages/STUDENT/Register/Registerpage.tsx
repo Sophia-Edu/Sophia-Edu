@@ -9,7 +9,7 @@ import {
 	FormProps,
 	Checkbox,
 } from "antd";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { AuthRequest } from "../../../requests";
 import { useAlert } from "../../../store";
 import { URL } from "../../../utils/constants";
@@ -26,7 +26,6 @@ type FieldType = {
 };
 
 const Registerpage: React.FC<any> = () => {
-	const nav = useNavigate();
 	const [loading, setLoading] = useState(false);
 	const { onFailure: AlertFailure, onSuccess } = useAlert(); // Assuming useAlert handles success and failure alerts
 

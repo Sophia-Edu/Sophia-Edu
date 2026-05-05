@@ -206,7 +206,7 @@ const Courses: React.FC = () => {
             ),
         },
         {
-            title: "Amount (NGN)",
+            title: "Amount ($)",
             dataIndex: "price",
             render: (price: number) => price.toLocaleString(),
         },
@@ -314,7 +314,7 @@ const Courses: React.FC = () => {
                         <Form.Item label="Content" name="content">
                             <Input.TextArea placeholder="Enter course content" rows={4} />
                         </Form.Item>
-                        <Form.Item label="Price (NGN)" name="price" rules={[{ required: true, message: 'Please enter price' }]}>
+                        <Form.Item label="Price ($)" name="price" rules={[{ required: true, message: 'Please enter price' }]}>
                             <Input type="number" placeholder="Enter price" />
                         </Form.Item>
                         <Form.Item label="Status" name="status">

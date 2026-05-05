@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Layout from "../../DashboardLayout";
-import { Tabs, Form, Input, Button, Upload, message, Typography, Checkbox, Spin } from "antd";
+import { Tabs, Form, Input, Button, Upload, message, Typography, Checkbox } from "antd";
 import type { UploadProps } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import { AdminRequest } from "../../../requests";
@@ -113,8 +113,8 @@ const SubjectsIndustriesUploadPage: React.FC = () => {
   const [industriesTree, setIndustriesTree] = useState<any[]>([]);
   const [rawSubjectsResponse, setRawSubjectsResponse] = useState<any>(null);
   const [rawIndustriesResponse, setRawIndustriesResponse] = useState<any>(null);
-  const [loadingSubjectsTree, setLoadingSubjectsTree] = useState(false);
-  const [loadingIndustriesTree, setLoadingIndustriesTree] = useState(false);
+  const [, setLoadingSubjectsTree] = useState(false);
+  const [, setLoadingIndustriesTree] = useState(false);
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<Set<number>>(new Set());
   const [selectedIndustryIds, setSelectedIndustryIds] = useState<Set<number>>(new Set());
 

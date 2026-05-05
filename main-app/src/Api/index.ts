@@ -4,7 +4,11 @@ import { getStoredAuthToken, removeStoredAuthToken } from "../utils/storage";
 // Use a relative base path so it can be proxied in dev and mapped in prod.
 // For production builds you can set VITE_API_BASE in your environment and
 // the dev server will proxy /api to that target when running `npm run dev`.
-export const baseurl = (import.meta.env.VITE_API_BASE as string) || "/api";
+// In dev, route through the Vite proxy (/api) to avoid CORS issues.
+// In production, use the full VITE_API_BASE URL directly.
+export const baseurl = import.meta.env.DEV
+    ? "/api"
+    : ((import.meta.env.VITE_API_BASE as string) || "/api");
 // export const socket = io(baseurl);
 const api = axios.create({
     baseURL: `${baseurl}`,

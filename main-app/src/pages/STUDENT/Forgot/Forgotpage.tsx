@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import "./Forgotpage.styles.scss";
 import { Col, Form, Input, Row } from "antd";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Button } from "../../../components";
 import { URL } from "../../../utils/constants";
 import { Logo, student, woman } from "../../../assets";
@@ -12,7 +12,6 @@ const Forgotpage: React.FC<any> = () => {
     const [form] = Form.useForm();
     const { onSuccess, onFailure } = useAlert();
     const [loading, setLoading] = useState(false);
-    const nav = useNavigate();
 
     const onFinish = async (values: { email: string }) => {
         try {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import Layout from "../../Layout";
 import InfiniteScroll from "react-infinite-scroll-component";
 import { SendArrow } from "../../../assets";

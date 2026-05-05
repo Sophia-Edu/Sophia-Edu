@@ -5,7 +5,7 @@ import { Button, Form, Input, Select, Upload, Checkbox, List } from "antd";
 import { URL } from "../../../utils/constants";
 
 import { ArrowLeftOutlined, LoadingOutlined, UploadOutlined, PlusOutlined } from "@ant-design/icons";
-import { CourseProps, useCourse } from "../../../store.tsx";
+import { useCourse } from "../../../store.tsx";
 import { toast } from "react-toastify";
 import { TutorRequest, AdminRequest } from "../../../requests";
 import { useNavigate } from "react-router-dom";
@@ -425,7 +425,6 @@ const CreateCoursePage: React.FC = () => {
   // New function to format multiple modules for batch creation
   const formatMultipleModulesPayload = async (
     allModulesData: any[],
-    courseId: string
   ) => {
     const modules: any[] = [];
 
@@ -596,8 +595,7 @@ const CreateCoursePage: React.FC = () => {
         // All modules completed - create all modules at once
         console.log("Creating modules with data:", updatedModulesData);
         const payload = await formatMultipleModulesPayload(
-          updatedModulesData,
-          String(course.id)
+          updatedModulesData
         );
         console.log("Formatted payload:", payload);
 

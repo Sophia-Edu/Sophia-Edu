@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Card, Select, Input, Button, Space, Tag, Statistic, Row, Col, DatePicker, message } from 'antd';
+import { Table, Card, Select, Input, Button, Space, Tag, Statistic, Row, Col, message } from 'antd';
 import { SearchOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import adminRequests from '../../../requests/admin.request';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Option } = Select;
-const { RangePicker } = DatePicker;
 
 interface Survey {
   id: number;
@@ -58,12 +57,12 @@ const SurveyManagement: React.FC = () => {
         filters.courseId,
         filters.rating
       );
-      
-      setSurveys(response.surveys || []);
+      const data: any = (response as any)?.data ?? response;
+      setSurveys(data.surveys || data.items || []);
       setPagination({
         current: page,
         pageSize,
-        total: response.pagination?.total || 0,
+        total: data.pagination?.total || data.total || 0,
       });
     } catch (error: any) {
       message.error('Failed to fetch surveys: ' + error.message);
@@ -76,7 +75,8 @@ const SurveyManagement: React.FC = () => {
   const fetchStats = async () => {
     try {
       const response = await adminRequests.getSurveyStats(filters.courseId);
-      setStats(response);
+      const data: any = (response as any)?.data ?? response;
+      setStats(data);
     } catch (error: any) {
       message.error('Failed to fetch survey statistics: ' + error.message);
     }
@@ -171,7 +171,7 @@ const SurveyManagement: React.FC = () => {
       title: 'Actions',
       key: 'actions',
       width: 100,
-      render: (_, record) => (
+      render: () => (
         <Space>
           <Button
             type="text"

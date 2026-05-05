@@ -310,7 +310,7 @@ const ListingPage: React.FC<any> = () => {
 
 	// Format price with NGN currency
 	const formatPrice = (price: number) => {
-		return `NGN ${price.toLocaleString()}`;
+		return `$${price.toLocaleString()}`;
 	};
 
 	// Skeleton loader component
