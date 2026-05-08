@@ -27,17 +27,13 @@ const HomePage: React.FC = () => {
 							className="playfair-display-bold"
 							style={{ fontSize: 48, marginBottom: 18 }}
 						>
-							The Learning and Career Development Platform
+							Where Learning, Research, Employability, and Venture Creation Intersect
 						</h2>
 						<p
 							className="inter-normal text-[18px]"
 							style={{ marginBottom: 18, lineHeight: 2 }}
 						>
-							Learn the most important skills to succeed in your chosen course
-							of study and connect with researchers with similar interests.
-							Transform your research into an enterprising venture. Earn money
-							and connect with potential investors, collaborators, and
-							employers!
+							Develop essential academic and professional skills, collaborate with researchers and innovators, and transform your ideas into impactful ventures, careers, and opportunities.
 						</p>
 						<a
 							href={"https://sophiamain.netlify.app/register"}
