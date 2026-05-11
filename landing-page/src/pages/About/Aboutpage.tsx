@@ -50,10 +50,7 @@ const AboutPage: React.FC = () => {
 							className="inter-normal text-justify"
 							style={{ marginBottom: 18, lineHeight: 2, fontSize: 16 }}
 						>
-							Sophia came up as a solution to a felt need and challenges
-							observed by Sophia founders themselves in the international
-							education sector, and to which current services are not solving
-							adequately.
+							Sophia came up as a response to the increasing need to help students and young professionals prepare for the future of learning and the future of work in the age of AI through the development of essential academic and professional skills.
 						</p>
 						<p
 							className="inter-normal text-justify"
